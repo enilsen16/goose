@@ -90,6 +90,7 @@ export interface ToolResponseContent {
   id: string;
   name: string;
   result: string;
+  structuredContent?: unknown;
   isError: boolean;
   annotations?: ContentAnnotations;
 }
