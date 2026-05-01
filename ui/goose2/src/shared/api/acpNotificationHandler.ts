@@ -52,6 +52,39 @@ const pendingUsageUpdates = new Map<
   { accumulatedTotal: number; contextLimit: number }
 >();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getToolCallIdentity(update: SessionUpdate): {
+  toolName?: string;
+  extensionName?: string;
+} {
+  if (!isRecord(update._meta)) {
+    return {};
+  }
+  const goose = update._meta.goose;
+  if (!isRecord(goose)) {
+    return {};
+  }
+
+  const toolCall = isRecord(goose.mcpApp)
+    ? goose.mcpApp
+    : isRecord(goose.toolCall)
+      ? goose.toolCall
+      : null;
+  if (!toolCall) return {};
+
+  return {
+    ...(typeof toolCall.toolName === "string"
+      ? { toolName: toolCall.toolName }
+      : {}),
+    ...(typeof toolCall.extensionName === "string"
+      ? { extensionName: toolCall.extensionName }
+      : {}),
+  };
+}
+
 subscribeToSessionRegistration((localSessionId, gooseSessionId) => {
   const pendingUsage = pendingUsageUpdates.get(gooseSessionId);
   if (!pendingUsage) {
@@ -173,10 +206,12 @@ function handleReplay(
 
     case "tool_call": {
       const msg = ensureReplayAssistantMessage(sessionId);
+      const identity = getToolCallIdentity(update);
       msg.content.push({
         type: "toolRequest",
         id: update.toolCallId,
         name: update.title,
+        ...identity,
         arguments: {},
         status: "executing",
         startedAt: Date.now(),
@@ -186,6 +221,7 @@ function handleReplay(
 
     case "tool_call_update": {
       const replayMessageId = getTrackedReplayAssistantMessageId(sessionId);
+      const identity = getToolCallIdentity(update);
       const msg =
         findReplayMessageWithToolCall(sessionId, update.toolCallId) ??
         (replayMessageId
@@ -197,7 +233,10 @@ function handleReplay(
             (c) => c.type === "toolRequest" && c.id === update.toolCallId,
           );
           if (tc && tc.type === "toolRequest") {
-            (tc as ToolRequestContent).name = update.title;
+            Object.assign(tc as ToolRequestContent, {
+              name: update.title,
+              ...identity,
+            });
           }
         }
         if (update.status === "completed" || update.status === "failed") {
@@ -209,6 +248,7 @@ function handleReplay(
             if (idx >= 0) {
               msg.content[idx] = {
                 ...tc,
+                ...identity,
                 status: "completed",
               } as ToolRequestContent;
             }
@@ -275,11 +315,13 @@ function handleLive(
 
     case "tool_call": {
       const messageId = ensureLiveAssistantMessage(sessionId, gooseSessionId);
+      const identity = getToolCallIdentity(update);
 
       const toolRequest: ToolRequestContent = {
         type: "toolRequest",
         id: update.toolCallId,
         name: update.title,
+        ...identity,
         arguments: {},
         status: "executing",
         startedAt: Date.now(),
@@ -291,13 +333,18 @@ function handleLive(
 
     case "tool_call_update": {
       const messageId = ensureLiveAssistantMessage(sessionId, gooseSessionId);
+      const identity = getToolCallIdentity(update);
 
-      if (update.title) {
+      if (update.title || Object.keys(identity).length > 0) {
         store.updateMessage(sessionId, messageId, (msg) => ({
           ...msg,
           content: msg.content.map((c) =>
             c.type === "toolRequest" && c.id === update.toolCallId
-              ? { ...c, name: update.title ?? "" }
+              ? {
+                  ...c,
+                  ...(update.title ? { name: update.title } : {}),
+                  ...identity,
+                }
               : c,
           ),
         }));
@@ -315,7 +362,7 @@ function handleLive(
           ...msg,
           content: msg.content.map((block) =>
             block.type === "toolRequest" && block.id === update.toolCallId
-              ? { ...block, status: "completed" }
+              ? { ...block, ...identity, status: "completed" }
               : block,
           ),
         }));
