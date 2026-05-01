@@ -4,6 +4,11 @@ type ThemePreference = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
 type Density = "compact" | "comfortable" | "spacious";
 
+const THEME_PREFERENCES = ["light", "dark", "system"] as const;
+const DENSITIES = ["compact", "comfortable", "spacious"] as const;
+const DEFAULT_ACCENT_COLOR = "#3b82f6";
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+
 type ThemeProviderProps = {
   children: React.ReactNode;
   defaultTheme?: ThemePreference;
@@ -32,6 +37,26 @@ function resolveTheme(preference: ThemePreference): ResolvedTheme {
   return preference;
 }
 
+function isDensity(value: string | null): value is Density {
+  return DENSITIES.includes(value as Density);
+}
+
+function isThemePreference(value: string | null): value is ThemePreference {
+  return THEME_PREFERENCES.includes(value as ThemePreference);
+}
+
+function resolveAccentColor(value: string | null): string {
+  return value && HEX_COLOR_PATTERN.test(value) ? value : DEFAULT_ACCENT_COLOR;
+}
+
+function applyDensityAttribute(root: HTMLElement, density: Density) {
+  if (density === "comfortable") {
+    root.removeAttribute("data-density");
+  } else {
+    root.dataset.density = density;
+  }
+}
+
 function getContrastColor(hexColor: string): string {
   const hex = hexColor.replace("#", "");
   const r = Number.parseInt(hex.slice(0, 2), 16);
@@ -46,10 +71,8 @@ export function ThemeProvider({
   defaultTheme = "system",
 }: ThemeProviderProps) {
   const [theme, setThemeState] = React.useState<ThemePreference>(() => {
-    const stored = localStorage.getItem(
-      "goose-theme",
-    ) as ThemePreference | null;
-    return stored ?? defaultTheme;
+    const stored = localStorage.getItem("goose-theme");
+    return isThemePreference(stored) ? stored : defaultTheme;
   });
 
   const [resolvedTheme, setResolvedTheme] = React.useState<ResolvedTheme>(() =>
@@ -57,12 +80,12 @@ export function ThemeProvider({
   );
 
   const [accentColor, setAccentColorState] = React.useState<string>(() => {
-    return localStorage.getItem("goose-accent-color") ?? "#3b82f6";
+    return resolveAccentColor(localStorage.getItem("goose-accent-color"));
   });
 
   const [density, setDensityState] = React.useState<Density>(() => {
-    const stored = localStorage.getItem("goose-density") as Density | null;
-    return stored ?? "comfortable";
+    const stored = localStorage.getItem("goose-density");
+    return isDensity(stored) ? stored : "comfortable";
   });
 
   const setTheme = React.useCallback((newTheme: ThemePreference) => {
@@ -71,8 +94,9 @@ export function ThemeProvider({
   }, []);
 
   const setAccentColor = React.useCallback((color: string) => {
-    localStorage.setItem("goose-accent-color", color);
-    setAccentColorState(color);
+    const nextColor = resolveAccentColor(color);
+    localStorage.setItem("goose-accent-color", nextColor);
+    setAccentColorState(nextColor);
   }, []);
 
   const setDensity = React.useCallback((d: Density) => {
@@ -110,14 +134,11 @@ export function ThemeProvider({
       "--color-brand-foreground",
       getContrastColor(accentColor),
     );
+  }, [accentColor]);
 
-    const spacingScale: Record<Density, string> = {
-      compact: "0.75",
-      comfortable: "1",
-      spacious: "1.25",
-    };
-    root.style.setProperty("--density-spacing", spacingScale[density]);
-  }, [accentColor, density]);
+  React.useLayoutEffect(() => {
+    applyDensityAttribute(window.document.documentElement, density);
+  }, [density]);
 
   const value = React.useMemo(
     () => ({
