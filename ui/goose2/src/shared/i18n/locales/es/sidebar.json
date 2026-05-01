@@ -12,7 +12,6 @@
   },
   "navigation": {
     "agents": "Agentes",
-    "extensions": "Extensiones",
     "home": "Inicio",
     "sessionHistory": "Historial de sesiones",
     "skills": "Habilidades"

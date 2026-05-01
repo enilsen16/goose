@@ -47,24 +47,17 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
-  overlayClassName,
-  positionerClassName,
   showCloseButton = true,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
-  overlayClassName?: string;
-  positionerClassName?: string;
   showCloseButton?: boolean;
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay className={overlayClassName} />
+      <DialogOverlay />
       <div
         data-slot="dialog-positioner"
-        className={cn(
-          "pointer-events-none fixed inset-0 z-[61] grid place-items-center p-4",
-          positionerClassName,
-        )}
+        className="pointer-events-none fixed inset-0 z-[61] grid place-items-center p-4"
       >
         <DialogPrimitive.Content
           data-slot="dialog-content"

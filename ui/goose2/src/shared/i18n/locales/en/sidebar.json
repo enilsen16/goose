@@ -12,7 +12,6 @@
   },
   "navigation": {
     "agents": "Agents",
-    "extensions": "Extensions",
     "home": "Home",
     "sessionHistory": "Session history",
     "skills": "Skills"

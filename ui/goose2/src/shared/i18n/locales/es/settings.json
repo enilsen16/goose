@@ -76,17 +76,16 @@
     "title": "Extensiones",
     "description": "Administra las extensiones MCP que agregan herramientas y capacidades a Goose.",
     "search": "Buscar extensiones...",
+    "enabled": "Habilitadas",
+    "enabledCount": "Habilitadas ({{count}})",
+    "available": "Disponibles",
+    "availableCount": "Disponibles ({{count}})",
     "empty": "No hay extensiones configuradas.",
     "noResults": "Ninguna extensión coincide con tu búsqueda.",
     "addExtension": "Agregar extensión",
     "editExtension": "Editar extensión",
     "deleteExtension": "Eliminar extensión",
-    "deleteConfirmation": {
-      "title": "¿Eliminar \"{{name}}\" de forma permanente?",
-      "description": "Esto eliminará de forma permanente esta extensión y toda su configuración.",
-      "confirm": "Eliminar extensión",
-      "deleting": "Eliminando..."
-    },
+    "toggle": "Activar/desactivar {{name}}",
     "configure": "Configurar {{name}}",
     "save": "Guardar",
     "cancel": "Cancelar",
@@ -114,20 +113,8 @@
       "streamable_http": "HTTP",
       "builtin": "Integrada"
     },
-    "filters": {
-      "all": "Todas"
-    },
-    "categories": {
-      "appsServices": "Apps y servicios",
-      "gooseCapabilities": "Capacidades de Goose"
-    },
-    "sections": {
-      "extensions": "Extensiones",
-      "gooseCapabilities": "Capacidades integradas de Goose"
-    },
-    "showGooseCapabilities": "Mostrar {{count}} capacidades integradas de Goose",
-    "hideGooseCapabilities": "Ocultar capacidades integradas de Goose",
     "errors": {
+      "toggleFailed": "Error al cambiar la extensión. Inténtalo de nuevo.",
       "saveFailed": "Error al guardar la extensión. Inténtalo de nuevo.",
       "deleteFailed": "Error al eliminar la extensión. Inténtalo de nuevo.",
       "nameConflict": "Ya existe una extensión llamada \"{{name}}\"."
@@ -206,6 +193,7 @@
     "doctor": "Diagnóstico",
     "general": "General",
     "projects": "Proyectos",
+    "extensions": "Extensiones",
     "providers": "Proveedores",
     "voice": "Voz"
   },
