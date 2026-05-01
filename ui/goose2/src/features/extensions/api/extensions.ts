@@ -1,11 +1,19 @@
+import type { SessionExtensionStatusDto } from "@aaif/goose-sdk";
 import { getClient } from "@/shared/api/acpConnection";
-import type { ExtensionConfig, ExtensionEntry } from "../types";
+import type {
+  ExtensionConfig,
+  ExtensionEntry,
+  SessionExtensionStatus,
+} from "../types";
 
-export function nameToKey(name: string): string {
-  return name
-    .replace(/\s/g, "")
-    .replace(/[^a-zA-Z0-9_-]/g, "_")
-    .toLowerCase();
+function toSessionExtensionStatus(
+  extension: SessionExtensionStatusDto,
+): SessionExtensionStatus {
+  return {
+    ...extension,
+    tools: extension.tools ?? [],
+    error: extension.error ?? undefined,
+  };
 }
 
 export async function listExtensions(): Promise<ExtensionEntry[]> {
@@ -14,10 +22,20 @@ export async function listExtensions(): Promise<ExtensionEntry[]> {
   return response.extensions as ExtensionEntry[];
 }
 
+export async function listSessionExtensions(
+  sessionId: string,
+): Promise<SessionExtensionStatus[]> {
+  const client = await getClient();
+  const response = await client.goose.GooseSessionExtensionsStatus({
+    sessionId,
+  });
+  return response.extensions.map(toSessionExtensionStatus);
+}
+
 export async function addExtension(
   name: string,
   extensionConfig: ExtensionConfig,
-  enabled: boolean,
+  enabled = false,
 ): Promise<void> {
   const client = await getClient();
   await client.goose.GooseConfigExtensionsAdd({
@@ -30,12 +48,4 @@ export async function addExtension(
 export async function removeExtension(configKey: string): Promise<void> {
   const client = await getClient();
   await client.goose.GooseConfigExtensionsRemove({ configKey });
-}
-
-export async function toggleExtension(
-  configKey: string,
-  enabled: boolean,
-): Promise<void> {
-  const client = await getClient();
-  await client.goose.GooseConfigExtensionsToggle({ configKey, enabled });
 }

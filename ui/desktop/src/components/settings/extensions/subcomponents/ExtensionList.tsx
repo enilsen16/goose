@@ -8,11 +8,11 @@ import { defineMessages, useIntl } from '../../../../i18n';
 const i18n = defineMessages({
   defaultExtensions: {
     id: 'extensionList.defaultExtensions',
-    defaultMessage: 'Default Extensions ({count})',
+    defaultMessage: 'Active by Default ({count})',
   },
   availableExtensions: {
     id: 'extensionList.availableExtensions',
-    defaultMessage: 'Available Extensions ({count})',
+    defaultMessage: 'Available On Demand ({count})',
   },
   noExtensions: {
     id: 'extensionList.noExtensions',
@@ -26,7 +26,6 @@ const i18n = defineMessages({
 
 interface ExtensionListProps {
   extensions: FixedExtensionEntry[];
-  onToggle: (extension: FixedExtensionEntry) => Promise<boolean | void> | void;
   onConfigure?: (extension: FixedExtensionEntry) => void;
   isStatic?: boolean;
   disableConfiguration?: boolean;
@@ -35,7 +34,6 @@ interface ExtensionListProps {
 
 export default function ExtensionList({
   extensions,
-  onToggle,
   onConfigure,
   isStatic,
   disableConfiguration: _disableConfiguration,
@@ -82,7 +80,6 @@ export default function ExtensionList({
               <ExtensionItem
                 key={extension.name}
                 extension={extension}
-                onToggle={onToggle}
                 onConfigure={onConfigure}
                 isStatic={isStatic}
               />
@@ -104,7 +101,6 @@ export default function ExtensionList({
               <ExtensionItem
                 key={extension.name}
                 extension={extension}
-                onToggle={onToggle}
                 onConfigure={onConfigure}
                 isStatic={isStatic}
               />
