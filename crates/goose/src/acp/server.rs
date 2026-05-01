@@ -1539,6 +1539,9 @@ impl GooseAcpAgent {
         };
 
         let mut fields = ToolCallUpdateFields::new().status(status);
+        if let Some(raw_output) = extract_tool_raw_output(&tool_response.tool_result) {
+            fields = fields.raw_output(raw_output);
+        }
         if !tool_response
             .tool_result
             .as_ref()
@@ -1712,6 +1715,13 @@ fn build_tool_call_content(tool_result: &ToolResult<CallToolResult>) -> Vec<Tool
             .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+fn extract_tool_raw_output(tool_result: &ToolResult<CallToolResult>) -> Option<serde_json::Value> {
+    tool_result
+        .as_ref()
+        .ok()
+        .and_then(|result| result.structured_content.clone())
 }
 
 impl GooseAcpAgent {
@@ -2162,6 +2172,11 @@ impl GooseAcpAgent {
                         };
 
                         let mut fields = ToolCallUpdateFields::new().status(status);
+                        if let Some(raw_output) =
+                            extract_tool_raw_output(&tool_response.tool_result)
+                        {
+                            fields = fields.raw_output(raw_output);
+                        }
                         if !tool_response
                             .tool_result
                             .as_ref()
@@ -3248,6 +3263,31 @@ print(\"hello, world\")
                     "extensionName": "weather",
                     "toolName": "weather__render",
                 },
+            })),
+        );
+    }
+
+    #[test]
+    fn test_extract_tool_raw_output_preserves_structured_content() {
+        let mut result = CallToolResult::success(vec![RmcpContent::text("fallback")]);
+        result.structured_content = Some(serde_json::json!({
+            "restaurants": [
+                {
+                    "name": "Coffee Shop",
+                    "unitToken": "unit-1",
+                },
+            ],
+        }));
+
+        assert_eq!(
+            extract_tool_raw_output(&Ok(result)),
+            Some(serde_json::json!({
+                "restaurants": [
+                    {
+                        "name": "Coffee Shop",
+                        "unitToken": "unit-1",
+                    },
+                ],
             })),
         );
     }
