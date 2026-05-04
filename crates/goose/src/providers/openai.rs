@@ -257,15 +257,7 @@ impl OpenAiProvider {
             api_client = api_client.with_header("OpenAI-Project", project)?;
         }
 
-        if let Some(headers) = &custom_headers {
-            let mut header_map = reqwest::header::HeaderMap::new();
-            for (key, value) in headers {
-                let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
-                let header_value = reqwest::header::HeaderValue::from_str(value)?;
-                header_map.insert(header_name, header_value);
-            }
-            api_client = api_client.with_headers(header_map)?;
-        }
+        api_client = api_client.with_custom_headers(custom_headers.as_ref())?;
 
         Ok(Self {
             api_client,
@@ -349,16 +341,7 @@ impl OpenAiProvider {
         let mut api_client =
             ApiClient::with_timeout(host, auth, std::time::Duration::from_secs(timeout_secs))?;
 
-        // Add custom headers if present
-        if let Some(headers) = &config.headers {
-            let mut header_map = reqwest::header::HeaderMap::new();
-            for (key, value) in headers {
-                let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
-                let header_value = reqwest::header::HeaderValue::from_str(value)?;
-                header_map.insert(header_name, header_value);
-            }
-            api_client = api_client.with_headers(header_map)?;
-        }
+        api_client = api_client.with_custom_headers(config.headers.as_ref())?;
 
         let custom_models = if !config.models.is_empty() {
             Some(config.models.iter().map(|m| m.name.clone()).collect())

@@ -7,6 +7,7 @@ use reqwest::{
     Certificate, Client, Identity, Response, StatusCode,
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::read_to_string;
 use std::path::PathBuf;
@@ -346,6 +347,19 @@ impl ApiClient {
         self.default_headers = headers;
         self.rebuild_client()?;
         Ok(self)
+    }
+
+    pub fn with_custom_headers(self, headers: Option<&HashMap<String, String>>) -> Result<Self> {
+        let Some(headers) = headers else {
+            return Ok(self);
+        };
+        let mut header_map = HeaderMap::new();
+        for (key, value) in headers {
+            let header_name = HeaderName::from_bytes(key.as_bytes())?;
+            let header_value = HeaderValue::from_str(value)?;
+            header_map.insert(header_name, header_value);
+        }
+        self.with_headers(header_map)
     }
 
     pub fn with_query(mut self, params: Vec<(String, String)>) -> Self {

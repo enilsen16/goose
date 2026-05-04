@@ -6,10 +6,23 @@ use std::path::Path;
 use crate::project_tracker::ProjectTracker;
 use goose::utils::safe_truncate;
 
-/// Format a DateTime for display
 fn format_date(date: DateTime<chrono::Utc>) -> String {
-    // Format: "2025-05-08 18:15:30"
     date.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+fn shorten_path(path_str: &str) -> String {
+    let path = Path::new(path_str);
+    let components: Vec<_> = path.components().collect();
+    let len = components.len();
+    if len <= 2 {
+        return path_str.to_string();
+    }
+    let mut result = String::from("...");
+    for component in components.iter().skip(len - 2) {
+        result.push('/');
+        result.push_str(component.as_os_str().to_string_lossy().as_ref());
+    }
+    result
 }
 
 /// Handle the default project command
@@ -48,21 +61,7 @@ pub fn handle_project_default() -> Result<()> {
         return Ok(());
     }
 
-    // Format the path for display
-    let path = Path::new(project_dir);
-    let components: Vec<_> = path.components().collect();
-    let len = components.len();
-    let short_path = if len <= 2 {
-        project_dir.clone()
-    } else {
-        let mut path_str = String::new();
-        path_str.push_str("...");
-        for component in components.iter().skip(len - 2) {
-            path_str.push('/');
-            path_str.push_str(component.as_os_str().to_string_lossy().as_ref());
-        }
-        path_str
-    };
+    let short_path = shorten_path(project_dir);
 
     // Ask the user what they want to do
     let _ = intro("goose Project Manager");
@@ -174,25 +173,11 @@ pub fn handle_projects_interactive() -> Result<()> {
     // Sort projects by last_accessed (newest first)
     projects.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
 
-    // Format project paths for display
     let project_choices: Vec<(String, String)> = projects
         .iter()
         .enumerate()
         .map(|(i, project)| {
-            let path = Path::new(&project.path);
-            let components: Vec<_> = path.components().collect();
-            let len = components.len();
-            let short_path = if len <= 2 {
-                project.path.clone()
-            } else {
-                let mut path_str = String::new();
-                path_str.push_str("...");
-                for component in components.iter().skip(len - 2) {
-                    path_str.push('/');
-                    path_str.push_str(component.as_os_str().to_string_lossy().as_ref());
-                }
-                path_str
-            };
+            let short_path = shorten_path(&project.path);
 
             // Include last instruction if available (truncated)
             let instruction_preview =

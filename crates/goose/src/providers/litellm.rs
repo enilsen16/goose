@@ -62,15 +62,7 @@ impl LiteLLMProvider {
         let mut api_client =
             ApiClient::with_timeout(host, auth, std::time::Duration::from_secs(timeout_secs))?;
 
-        if let Some(headers) = custom_headers {
-            let mut header_map = reqwest::header::HeaderMap::new();
-            for (key, value) in headers {
-                let header_name = reqwest::header::HeaderName::from_bytes(key.as_bytes())?;
-                let header_value = reqwest::header::HeaderValue::from_str(&value)?;
-                header_map.insert(header_name, header_value);
-            }
-            api_client = api_client.with_headers(header_map)?;
-        }
+        api_client = api_client.with_custom_headers(custom_headers.as_ref())?;
 
         Ok(Self {
             api_client,

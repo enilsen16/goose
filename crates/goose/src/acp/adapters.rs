@@ -88,7 +88,7 @@ impl tokio::io::AsyncWrite for SenderToAsyncWrite {
         self.buffer.extend_from_slice(buf);
 
         while let Some(pos) = self.buffer.iter().position(|&b| b == b'\n') {
-            let line = String::from_utf8_lossy(&self.buffer[..pos]).to_string();
+            let line = String::from_utf8_lossy(&self.buffer[..pos]).into_owned();
             self.buffer.drain(..=pos);
 
             if !line.is_empty() && self.tx.send(line).is_err() {
