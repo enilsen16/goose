@@ -161,6 +161,39 @@ fn convert_json_object_to_utoipa(
     }
 }
 
+fn apply_numeric_constraints(
+    mut builder: ObjectBuilder,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> ObjectBuilder {
+    use serde_json::Value;
+    if let Some(Value::Number(v)) = obj.get("minimum") {
+        if let Some(n) = v.as_f64() {
+            builder = builder.minimum(Some(n));
+        }
+    }
+    if let Some(Value::Number(v)) = obj.get("maximum") {
+        if let Some(n) = v.as_f64() {
+            builder = builder.maximum(Some(n));
+        }
+    }
+    if let Some(Value::Number(v)) = obj.get("exclusiveMinimum") {
+        if let Some(n) = v.as_f64() {
+            builder = builder.exclusive_minimum(Some(n));
+        }
+    }
+    if let Some(Value::Number(v)) = obj.get("exclusiveMaximum") {
+        if let Some(n) = v.as_f64() {
+            builder = builder.exclusive_maximum(Some(n));
+        }
+    }
+    if let Some(Value::Number(v)) = obj.get("multipleOf") {
+        if let Some(n) = v.as_f64() {
+            builder = builder.multiple_of(Some(n));
+        }
+    }
+    builder
+}
+
 fn convert_typed_schema(
     type_str: &str,
     obj: &serde_json::Map<String, serde_json::Value>,
@@ -287,65 +320,17 @@ fn convert_typed_schema(
             RefOr::T(Schema::Object(object_builder.build()))
         }
         "number" => {
-            let mut object_builder = ObjectBuilder::new().schema_type(SchemaType::Number);
-
-            if let Some(Value::Number(minimum)) = obj.get("minimum") {
-                if let Some(min) = minimum.as_f64() {
-                    object_builder = object_builder.minimum(Some(min));
-                }
-            }
-            if let Some(Value::Number(maximum)) = obj.get("maximum") {
-                if let Some(max) = maximum.as_f64() {
-                    object_builder = object_builder.maximum(Some(max));
-                }
-            }
-            if let Some(Value::Number(exclusive_minimum)) = obj.get("exclusiveMinimum") {
-                if let Some(min) = exclusive_minimum.as_f64() {
-                    object_builder = object_builder.exclusive_minimum(Some(min));
-                }
-            }
-            if let Some(Value::Number(exclusive_maximum)) = obj.get("exclusiveMaximum") {
-                if let Some(max) = exclusive_maximum.as_f64() {
-                    object_builder = object_builder.exclusive_maximum(Some(max));
-                }
-            }
-            if let Some(Value::Number(multiple_of)) = obj.get("multipleOf") {
-                if let Some(mult) = multiple_of.as_f64() {
-                    object_builder = object_builder.multiple_of(Some(mult));
-                }
-            }
-
+            let object_builder = apply_numeric_constraints(
+                ObjectBuilder::new().schema_type(SchemaType::Number),
+                obj,
+            );
             RefOr::T(Schema::Object(object_builder.build()))
         }
         "integer" => {
-            let mut object_builder = ObjectBuilder::new().schema_type(SchemaType::Integer);
-
-            if let Some(Value::Number(minimum)) = obj.get("minimum") {
-                if let Some(min) = minimum.as_f64() {
-                    object_builder = object_builder.minimum(Some(min));
-                }
-            }
-            if let Some(Value::Number(maximum)) = obj.get("maximum") {
-                if let Some(max) = maximum.as_f64() {
-                    object_builder = object_builder.maximum(Some(max));
-                }
-            }
-            if let Some(Value::Number(exclusive_minimum)) = obj.get("exclusiveMinimum") {
-                if let Some(min) = exclusive_minimum.as_f64() {
-                    object_builder = object_builder.exclusive_minimum(Some(min));
-                }
-            }
-            if let Some(Value::Number(exclusive_maximum)) = obj.get("exclusiveMaximum") {
-                if let Some(max) = exclusive_maximum.as_f64() {
-                    object_builder = object_builder.exclusive_maximum(Some(max));
-                }
-            }
-            if let Some(Value::Number(multiple_of)) = obj.get("multipleOf") {
-                if let Some(mult) = multiple_of.as_f64() {
-                    object_builder = object_builder.multiple_of(Some(mult));
-                }
-            }
-
+            let object_builder = apply_numeric_constraints(
+                ObjectBuilder::new().schema_type(SchemaType::Integer),
+                obj,
+            );
             RefOr::T(Schema::Object(object_builder.build()))
         }
         "boolean" => RefOr::T(Schema::Object(
