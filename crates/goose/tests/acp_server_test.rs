@@ -13,7 +13,8 @@ use common_tests::{
     run_fs_write_text_file_true, run_initialize_doesnt_hit_provider, run_list_sessions,
     run_load_mode, run_load_model, run_load_session_error, run_load_session_mcp, run_mode_set,
     run_model_list, run_model_set, run_model_set_error_session_not_found,
-    run_new_session_returns_initial_config, run_permission_persistence, run_prompt_basic,
+    run_new_session_returns_initial_config, run_permission_persistence,
+    run_persist_extension_data_on_new_session, run_prompt_basic,
     run_prompt_error, run_prompt_image, run_prompt_image_attachment, run_prompt_mcp,
     run_prompt_model_mismatch, run_prompt_skill, run_session_name_update_notification,
     run_shell_terminal_false, run_shell_terminal_true,
@@ -80,6 +81,11 @@ fn assert_invalid_params(error: anyhow::Error) {
 #[test]
 fn test_config_mcp() {
     run_test(async { run_config_mcp::<AcpServerConnection>().await });
+}
+
+#[test]
+fn test_persist_extension_data_on_new_session() {
+    run_test(async { run_persist_extension_data_on_new_session::<AcpServerConnection>().await });
 }
 
 #[test]
