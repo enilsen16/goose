@@ -16,6 +16,7 @@ use fs_err as fs;
 use goose::acp::server::AcpProviderFactory;
 use goose::config::base::CONFIG_YAML_NAME;
 use goose::config::GooseMode;
+use goose::session::{EnabledExtensionsState, ExtensionData};
 use goose::conversation::message::Message;
 use goose::model::ModelConfig;
 use goose::providers::base::{
@@ -291,6 +292,76 @@ pub async fn run_config_mcp<C: Connection>() {
         ],
     );
     expected_session_id.assert_matches(&session.session_id().0);
+}
+
+pub async fn run_persist_extension_data_on_new_session<C: Connection>() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let expected_session_id = C::expected_session_id();
+    let prompt = "Use the get_code tool and output only its result.";
+    let mcp = McpFixture::new(expected_session_id.clone()).await;
+
+    let config_yaml = format!(
+        "GOOSE_MODEL: {TEST_MODEL}\nGOOSE_PROVIDER: openai\nextensions_on_demand_migration: true\nextensions:\n  mcp-fixture:\n    enabled: true\n    type: streamable_http\n    name: mcp-fixture\n    description: MCP fixture\n    uri: \"{}\"\n  developer:\n    enabled: true\n    type: platform\n    name: developer\n    description: Developer\n    display_name: Developer\n    bundled: true\n    available_tools: []\n",
+        mcp.url
+    );
+    fs::write(temp_dir.path().join(CONFIG_YAML_NAME), config_yaml).unwrap();
+
+    let openai = OpenAiFixture::new(
+        vec![
+            (
+                prompt.to_string(),
+                include_str!("../acp_test_data/openai_tool_call.txt"),
+            ),
+            (
+                format!(r#""content":"{FAKE_CODE}""#),
+                include_str!("../acp_test_data/openai_tool_result.txt"),
+            ),
+        ],
+        expected_session_id.clone(),
+    )
+    .await;
+
+    let config = TestConnectionConfig {
+        data_root: temp_dir.path().to_path_buf(),
+        ..Default::default()
+    };
+
+    let mut conn = C::new(config, openai).await;
+    let SessionData { mut session, .. } = conn.new_session().await.unwrap();
+    expected_session_id.set(&session.session_id().0);
+
+    // Force FullyReady — Phase 2 (extension load + persist) is a background
+    // task, so we need a synchronization barrier before reading the DB.
+    let output = session
+        .prompt(prompt, PermissionDecision::Cancel)
+        .await
+        .unwrap();
+    assert_eq!(output.text, FAKE_CODE);
+
+    let data_root = conn.data_root();
+    let db_path = data_root.join("sessions").join("sessions.db");
+    let pool = SqlitePoolOptions::new()
+        .connect(&format!("sqlite:{}?mode=ro", db_path.display()))
+        .await
+        .unwrap();
+    // The ACP protocol session id is a UUID, but the goose-internal session
+    // id (the DB row id) is a separate identifier. Query the only row.
+    let extension_data_json: String =
+        sqlx::query_scalar("SELECT extension_data FROM sessions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let extension_data: ExtensionData = serde_json::from_str(&extension_data_json)
+        .expect("extension_data column should be valid ExtensionData JSON");
+    let state = EnabledExtensionsState::from_extension_data(&extension_data)
+        .expect("EnabledExtensionsState should be present after session init");
+    let names: Vec<String> = state.extensions.iter().map(|e| e.name()).collect();
+    for expected in ["developer", "mcp-fixture"] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "extension_data should contain {expected}, got: {names:?}"
+        );
+    }
 }
 
 // Also proves developer loaded from config.yaml (not CLI args) gets ACP fs delegation.

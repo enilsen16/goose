@@ -24,7 +24,7 @@ use crate::providers::inventory::{
     RefreshPlan, RefreshSkipReason,
 };
 use crate::session::session_manager::SessionType;
-use crate::session::{EnabledExtensionsState, Session, SessionManager};
+use crate::session::{EnabledExtensionsState, ExtensionState, Session, SessionManager};
 use crate::source_roots::SourceRoot;
 use crate::utils::sanitize_unicode_tags;
 use agent_client_protocol::schema::{
@@ -1366,7 +1366,7 @@ impl GooseAcpAgent {
             let phase1: Result<Arc<Agent>, String> = async {
                 let agent = Arc::new(Agent::with_config(
                     AgentConfig::new(
-                        session_manager,
+                        Arc::clone(&session_manager),
                         permission_manager,
                         None,
                         goose_mode,
@@ -1425,10 +1425,31 @@ impl GooseAcpAgent {
                 }
             };
 
+            // Build the intended extension set once — used both for the
+            // up-front persist (so clients reading extension_data during
+            // Phase 2 don't see the default `{}`) and as Phase 2's input.
+            let mut intended_extensions = get_enabled_extensions_with_config(&config);
+            intended_extensions.extend(builtins.iter().map(|b| builtin_to_extension_config(b)));
+
+            // Up-front persist. Mirrors goose-server's start_agent route.
+            {
+                let mut extension_data = goose_session.extension_data.clone();
+                let state = EnabledExtensionsState::new(intended_extensions.clone());
+                if let Err(e) = state.to_extension_data(&mut extension_data) {
+                    warn!(error = %e, sid = %sid, "failed to serialize intended extension state");
+                } else if let Err(e) = session_manager
+                    .update(&internal_session_id)
+                    .extension_data(extension_data)
+                    .apply()
+                    .await
+                {
+                    warn!(error = %e, sid = %sid, "failed to persist intended extension state");
+                }
+            }
+
             // ── Phase 2: load extensions (slow, may take seconds) ────────
             let phase2: Result<(), String> = async {
-                let mut extensions = get_enabled_extensions_with_config(&config);
-                extensions.extend(builtins.iter().map(|b| builtin_to_extension_config(b)));
+                let mut extensions = intended_extensions;
 
                 let acp_developer = if (client_fs_capabilities.read_text_file
                     || client_fs_capabilities.write_text_file
@@ -1522,6 +1543,15 @@ impl GooseAcpAgent {
                 // don't block the session: the provider is ready and the agent
                 // is usable.
                 error!(error = %e, "Background agent setup: extension phase had errors");
+            }
+
+            // Persist the actually-loaded extension set, including the ACP
+            // developer-client rewrite and any MCP servers, so subsequent
+            // reads of `extension_data` reflect what's really registered.
+            // Runs unconditionally — partial failures still get their
+            // successes recorded.
+            if let Err(e) = agent.persist_extension_state(&internal_session_id).await {
+                warn!(error = %e, sid = %sid, "failed to persist extension state after phase 2");
             }
 
             // Promote the handle to Ready and apply any working directory that
