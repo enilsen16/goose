@@ -9,6 +9,19 @@ import {
 import type { ModelOption } from "../types";
 import { PickerItem } from "./AgentModelPickerItem";
 
+// Agentic-CLI providers ship with their own fixed model lists (e.g.,
+// claude-acp accepts only `default`/`sonnet`/`haiku`). A typed custom
+// model id would be silently rejected by the backend, so don't surface
+// the "use as custom model" fallback for them.
+const FIXED_MODEL_AGENT_IDS = new Set([
+  "claude-acp",
+  "codex-acp",
+  "copilot-acp",
+  "amp-acp",
+  "cursor-agent",
+  "pi-acp",
+]);
+
 function getModelDisplayName(model: ModelOption) {
   return model.displayName ?? model.name;
 }
@@ -183,16 +196,17 @@ export function AllModelsList({
 }: ModelListProps & { onBack: () => void }) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const trimmedQuery = query.trim();
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) {
+    if (!trimmedQuery) {
       return sortModels(models, currentModelId, currentModelProviderId);
     }
-    const q = query.toLowerCase();
+    const q = trimmedQuery.toLowerCase();
     const matches = models.filter(
       (m) =>
         m.name.toLowerCase().includes(q) ||
@@ -202,7 +216,7 @@ export function AllModelsList({
         m.providerId?.toLowerCase().includes(q),
     );
     return sortModels(matches, currentModelId, currentModelProviderId);
-  }, [models, query, currentModelId, currentModelProviderId]);
+  }, [models, trimmedQuery, currentModelId, currentModelProviderId]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -275,6 +289,25 @@ export function AllModelsList({
             })}
           </div>
         </ScrollArea>
+      ) : trimmedQuery && !FIXED_MODEL_AGENT_IDS.has(selectedAgentId) ? (
+        <div className="p-1">
+          <PickerItem
+            onClick={() =>
+              onModelSelect({
+                id: trimmedQuery,
+                name: trimmedQuery,
+                providerId: currentModelProviderId ?? undefined,
+              })
+            }
+          >
+            <div className="min-w-0 flex-1 overflow-hidden">
+              <div className="truncate">{t("toolbar.useCustomModel")}</div>
+              <div className="truncate text-xs text-muted-foreground">
+                {trimmedQuery}
+              </div>
+            </div>
+          </PickerItem>
+        </div>
       ) : (
         <div className="px-3 py-4 text-center text-sm text-muted-foreground">
           {t("toolbar.noSearchResults")}

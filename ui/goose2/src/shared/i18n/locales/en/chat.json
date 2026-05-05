@@ -183,6 +183,7 @@
     "recommended": "Recommended",
     "noModelsAvailable": "No models available",
     "noSearchResults": "No matching models",
+    "useCustomModel": "Use as custom model",
     "showAllModels": "Browse all models",
     "noProject": "No project",
     "selectModel": "Select model",
