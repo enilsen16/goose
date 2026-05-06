@@ -179,6 +179,7 @@
     "model": "Modelo",
     "allModels": "Todos los modelos",
     "searchModels": "Buscar modelos...",
+    "upstreamHintFallback": "Este agente gestiona su propia selección de modelo.",
     "settings": "Configuración",
     "recommended": "Recomendados",
     "noModelsAvailable": "No hay modelos disponibles",

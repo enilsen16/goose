@@ -5,6 +5,7 @@ interface ModelDisplayLabelOptions {
   currentModelName?: string | null;
   currentModelProviderId?: string | null;
   availableModels?: ModelOption[];
+  inventoryLoaded?: boolean;
 }
 
 interface PickerTriggerLabelOptions extends ModelDisplayLabelOptions {
@@ -56,6 +57,7 @@ export function resolveDisplayModelLabel({
   currentModelName,
   currentModelProviderId,
   availableModels = [],
+  inventoryLoaded = false,
 }: ModelDisplayLabelOptions) {
   const inventoryModel = findSelectedInventoryModel({
     currentModelId,
@@ -73,6 +75,10 @@ export function resolveDisplayModelLabel({
   const modelName = normalizeLabel(currentModelName);
   if (modelName && modelName !== selectedModelId) {
     return modelName;
+  }
+
+  if (inventoryLoaded && selectedModelId) {
+    return selectedModelId;
   }
 
   return null;

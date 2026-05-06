@@ -157,6 +157,8 @@ export function ChatView({
               availableModels: controller.availableModels,
               modelsLoading: controller.modelsLoading,
               modelStatusMessage: controller.modelStatusMessage,
+              isUpstreamManaged: controller.isUpstreamManaged,
+              upstreamHint: controller.upstreamHint,
               onModelChange: controller.handleModelChange,
               onPickerOpen: controller.handlePickerOpen,
             }}

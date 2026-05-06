@@ -179,6 +179,7 @@
     "model": "Model",
     "allModels": "All models",
     "searchModels": "Search models...",
+    "upstreamHintFallback": "This agent manages its own model selection.",
     "settings": "Settings",
     "recommended": "Recommended",
     "noModelsAvailable": "No models available",

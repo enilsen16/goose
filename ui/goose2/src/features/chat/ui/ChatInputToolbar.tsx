@@ -90,6 +90,8 @@ export function ChatInputToolbar({
     availableModels = [],
     modelsLoading = false,
     modelStatusMessage = null,
+    isUpstreamManaged = false,
+    upstreamHint = null,
     onModelChange,
     onPickerOpen,
   } = agentModelPicker;
@@ -229,6 +231,8 @@ export function ChatInputToolbar({
             availableModels={availableModels}
             modelsLoading={modelsLoading}
             modelStatusMessage={modelStatusMessage}
+            isUpstreamManaged={isUpstreamManaged}
+            upstreamHint={upstreamHint}
             onModelChange={onModelChange}
             onOpen={onPickerOpen}
             loading={providersLoading}

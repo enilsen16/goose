@@ -68,6 +68,8 @@ export interface ChatInputAgentModelPicker {
   availableModels?: ModelOption[];
   modelsLoading?: boolean;
   modelStatusMessage?: string | null;
+  isUpstreamManaged?: boolean;
+  upstreamHint?: string | null;
   onModelChange?: (modelId: string, model?: ModelOption) => void;
   onPickerOpen?: () => void;
 }

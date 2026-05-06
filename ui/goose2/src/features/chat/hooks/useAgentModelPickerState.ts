@@ -217,12 +217,28 @@ export function useAgentModelPickerState({
       });
   }, []);
 
+  const isUpstreamManaged = useMemo(
+    () =>
+      selectedAgentId !== "goose" &&
+      selectedProviderInventory?.category === "agent",
+    [selectedAgentId, selectedProviderInventory?.category],
+  );
+  const upstreamHint = useMemo(
+    () =>
+      isUpstreamManaged
+        ? (selectedProviderInventory?.modelSelectionHint ?? null)
+        : null,
+    [isUpstreamManaged, selectedProviderInventory?.modelSelectionHint],
+  );
+
   return {
     selectedAgentId,
     pickerAgents,
     availableModels,
     modelsLoading,
     modelStatusMessage,
+    isUpstreamManaged,
+    upstreamHint,
     handleProviderChange,
     handleModelChange,
     handlePickerOpen,

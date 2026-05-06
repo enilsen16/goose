@@ -63,6 +63,8 @@ export function ChatInput({
     availableModels = [],
     modelsLoading = false,
     modelStatusMessage = null,
+    isUpstreamManaged = false,
+    upstreamHint = null,
     onModelChange,
     onPickerOpen,
   } = agentModelPicker ?? {};
@@ -361,9 +363,16 @@ export function ChatInput({
         currentModelName: currentModel,
         currentModelProviderId,
         availableModels,
+        inventoryLoaded: !modelsLoading,
       }) ?? undefined
     );
-  }, [availableModels, currentModel, currentModelId, currentModelProviderId]);
+  }, [
+    availableModels,
+    currentModel,
+    currentModelId,
+    currentModelProviderId,
+    modelsLoading,
+  ]);
   const inputPlaceholder = getChatInputPlaceholder(
     t,
     agentDisplayName,
@@ -483,6 +492,8 @@ export function ChatInput({
                   availableModels,
                   modelsLoading,
                   modelStatusMessage,
+                  isUpstreamManaged,
+                  upstreamHint,
                   onModelChange,
                   onPickerOpen,
                 }}

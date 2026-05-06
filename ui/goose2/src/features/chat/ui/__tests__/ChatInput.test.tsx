@@ -167,7 +167,7 @@ describe("ChatInput", () => {
     ).toHaveTextContent("Goose");
   });
 
-  it("shows provider label while the current model id is unresolved", () => {
+  it("shows provider label while inventory is still loading", () => {
     render(
       <ChatInput
         onSend={vi.fn()}
@@ -175,6 +175,7 @@ describe("ChatInput", () => {
         currentModelProviderId="claude-acp"
         currentModel="opus"
         availableModels={[]}
+        modelsLoading
         providers={[{ id: "claude-acp", label: "Claude Code" }]}
         selectedProvider="claude-acp"
       />,

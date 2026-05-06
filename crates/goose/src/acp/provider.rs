@@ -247,7 +247,7 @@ impl AcpProvider {
         // Resolve model from the session response.
         let resolved_model = if model.model_name == ACP_CURRENT_MODEL {
             if let Ok((resolved, _)) = resolve_model_info(&name, &response) {
-                tracing::info!(from = ACP_CURRENT_MODEL, to = %resolved, "resolved ACP model");
+                tracing::info!(provider = %name, from = ACP_CURRENT_MODEL, to = %resolved, "resolved ACP model");
                 ModelConfig {
                     model_name: resolved,
                     ..model

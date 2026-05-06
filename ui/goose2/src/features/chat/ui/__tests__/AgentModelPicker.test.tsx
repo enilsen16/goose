@@ -37,7 +37,7 @@ describe("AgentModelPicker", () => {
     ).toHaveTextContent("GPT-4o");
   });
 
-  it("uses the selected agent label while a raw model id is unresolved", () => {
+  it("uses the selected agent label while inventory is still loading", () => {
     render(
       <AgentModelPicker
         agents={AGENTS}
@@ -47,6 +47,7 @@ describe("AgentModelPicker", () => {
         currentModelProviderId="claude-acp"
         currentModelName="opus"
         availableModels={[]}
+        modelsLoading
         onModelChange={vi.fn()}
       />,
     );
@@ -56,6 +57,25 @@ describe("AgentModelPicker", () => {
     });
     expect(trigger).toHaveTextContent("Claude Code");
     expect(trigger).not.toHaveTextContent("opus");
+  });
+
+  it("falls back to the raw model id when inventory has loaded without it", () => {
+    render(
+      <AgentModelPicker
+        agents={AGENTS}
+        selectedAgentId="goose"
+        onAgentChange={vi.fn()}
+        currentModelId="tencent/hy3-preview:free"
+        currentModelProviderId="openrouter"
+        currentModelName="tencent/hy3-preview:free"
+        availableModels={[{ id: "openai/gpt-5.4-mini", name: "GPT-5.4 Mini" }]}
+        onModelChange={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /choose agent and model/i }),
+    ).toHaveTextContent("tencent/hy3-preview:free");
   });
 
   it("uses the inventory model label for a matching raw model id", () => {
@@ -424,5 +444,83 @@ describe("AgentModelPicker", () => {
     );
 
     expect(screen.getByText("No models available")).toBeInTheDocument();
+  });
+
+  describe("upstream-managed providers", () => {
+    it("renders the upstream hint banner above the model list", async () => {
+      const user = userEvent.setup();
+
+      render(
+        <AgentModelPicker
+          agents={AGENTS}
+          selectedAgentId="codex-acp"
+          onAgentChange={vi.fn()}
+          currentModelId="current"
+          currentModelName="current"
+          availableModels={[{ id: "current", name: "current" }]}
+          isUpstreamManaged
+          upstreamHint="Configured via the Codex CLI."
+          onModelChange={vi.fn()}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", { name: /choose agent and model/i }),
+      );
+
+      expect(
+        screen.getByText("Configured via the Codex CLI."),
+      ).toBeInTheDocument();
+    });
+
+    it("falls back to the localized upstream hint when none is provided", async () => {
+      const user = userEvent.setup();
+
+      render(
+        <AgentModelPicker
+          agents={AGENTS}
+          selectedAgentId="codex-acp"
+          onAgentChange={vi.fn()}
+          currentModelId="current"
+          currentModelName="current"
+          availableModels={[{ id: "current", name: "current" }]}
+          isUpstreamManaged
+          onModelChange={vi.fn()}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", { name: /choose agent and model/i }),
+      );
+
+      expect(
+        screen.getByText("This agent manages its own model selection."),
+      ).toBeInTheDocument();
+    });
+
+    it("hides the upstream hint when the provider is not upstream-managed", async () => {
+      const user = userEvent.setup();
+
+      render(
+        <AgentModelPicker
+          agents={AGENTS}
+          selectedAgentId="goose"
+          onAgentChange={vi.fn()}
+          currentModelId="gpt-4o"
+          currentModelName="GPT-4o"
+          availableModels={[{ id: "gpt-4o", name: "GPT-4o" }]}
+          upstreamHint="Configured via the Codex CLI."
+          onModelChange={vi.fn()}
+        />,
+      );
+
+      await user.click(
+        screen.getByRole("button", { name: /choose agent and model/i }),
+      );
+
+      expect(
+        screen.queryByText("Configured via the Codex CLI."),
+      ).not.toBeInTheDocument();
+    });
   });
 });

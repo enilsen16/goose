@@ -29,6 +29,8 @@ interface AgentModelPickerProps {
   availableModels: ModelOption[];
   modelsLoading?: boolean;
   modelStatusMessage?: string | null;
+  isUpstreamManaged?: boolean;
+  upstreamHint?: string | null;
   onModelChange?: (modelId: string, model?: ModelOption) => void;
   loading?: boolean;
   isCompact?: boolean;
@@ -48,6 +50,8 @@ export function AgentModelPicker({
   availableModels,
   modelsLoading = false,
   modelStatusMessage = null,
+  isUpstreamManaged = false,
+  upstreamHint = null,
   onModelChange,
   loading = false,
   isCompact = false,
@@ -66,6 +70,7 @@ export function AgentModelPicker({
     currentModelName,
     currentModelProviderId,
     availableModels,
+    inventoryLoaded: !modelsLoading,
   });
   const triggerLabel = showSelectedModelInTrigger
     ? resolvePickerTriggerLabel({
@@ -74,6 +79,7 @@ export function AgentModelPicker({
         currentModelProviderId,
         availableModels,
         selectedAgentLabel,
+        inventoryLoaded: !modelsLoading,
       })
     : selectedAgentLabel;
 
@@ -260,27 +266,35 @@ export function AgentModelPicker({
                 )}
               </div>
             ) : availableModels.length > 0 ? (
-              modelView === "recommended" ? (
-                <RecommendedModelList
-                  models={availableModels}
-                  currentModelId={currentModelId}
-                  currentModelProviderId={currentModelProviderId}
-                  selectedAgentId={selectedAgentId}
-                  onModelSelect={handleModelSelect}
-                  onShowAll={() => setModelView("all")}
-                  t={t}
-                />
-              ) : (
-                <AllModelsList
-                  models={availableModels}
-                  currentModelId={currentModelId}
-                  currentModelProviderId={currentModelProviderId}
-                  selectedAgentId={selectedAgentId}
-                  onModelSelect={handleModelSelect}
-                  onBack={() => setModelView("recommended")}
-                  t={t}
-                />
-              )
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                {isUpstreamManaged ? (
+                  <div className="shrink-0 border-b px-2 py-1.5 text-xs text-muted-foreground">
+                    {upstreamHint ?? t("toolbar.upstreamHintFallback")}
+                  </div>
+                ) : null}
+                {modelView === "recommended" ? (
+                  <RecommendedModelList
+                    models={availableModels}
+                    currentModelId={currentModelId}
+                    currentModelProviderId={currentModelProviderId}
+                    selectedAgentId={selectedAgentId}
+                    onModelSelect={handleModelSelect}
+                    onShowAll={() => setModelView("all")}
+                    t={t}
+                  />
+                ) : (
+                  <AllModelsList
+                    models={availableModels}
+                    currentModelId={currentModelId}
+                    currentModelProviderId={currentModelProviderId}
+                    selectedAgentId={selectedAgentId}
+                    isUpstreamManaged={isUpstreamManaged}
+                    onModelSelect={handleModelSelect}
+                    onBack={() => setModelView("recommended")}
+                    t={t}
+                  />
+                )}
+              </div>
             ) : (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div className="shrink-0 px-2 py-1.5 text-sm font-semibold">
