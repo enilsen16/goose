@@ -6,6 +6,7 @@ import type {
 } from "@/shared/types/messages";
 import { clearReplayBuffer } from "../hooks/replayBuffer";
 import type {
+  ActiveToolEntry,
   ChatState,
   SessionChatRuntime,
   TokenState,
@@ -72,6 +73,8 @@ interface ChatStoreActions {
   ) => void;
   updateStreamingText: (sessionId: string, text: string) => void;
   setChatState: (sessionId: string, state: ChatState) => void;
+  startToolCall: (sessionId: string, entry: ActiveToolEntry) => void;
+  endToolCall: (sessionId: string, toolCallId: string) => void;
   setError: (sessionId: string, error: string | null) => void;
   setConnected: (connected: boolean) => void;
   markSessionRead: (sessionId: string) => void;
@@ -269,16 +272,50 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   // State
   setChatState: (sessionId, chatState) =>
-    set((state) => ({
-      sessionStateById: {
-        ...state.sessionStateById,
-        [sessionId]: {
-          ...(state.sessionStateById[sessionId] ??
-            createInitialSessionRuntime()),
-          chatState,
+    set((state) => {
+      const current =
+        state.sessionStateById[sessionId] ?? createInitialSessionRuntime();
+      return {
+        sessionStateById: {
+          ...state.sessionStateById,
+          [sessionId]: {
+            ...current,
+            chatState,
+            activeTools: chatState === "idle" ? [] : current.activeTools,
+          },
         },
-      },
-    })),
+      };
+    }),
+
+  startToolCall: (sessionId, entry) =>
+    set((state) => {
+      const current =
+        state.sessionStateById[sessionId] ?? createInitialSessionRuntime();
+      if (current.activeTools.some((t) => t.id === entry.id)) return state;
+      return {
+        sessionStateById: {
+          ...state.sessionStateById,
+          [sessionId]: {
+            ...current,
+            activeTools: [...current.activeTools, entry],
+          },
+        },
+      };
+    }),
+
+  endToolCall: (sessionId, toolCallId) =>
+    set((state) => {
+      const current = state.sessionStateById[sessionId];
+      if (!current || current.activeTools.length === 0) return state;
+      const next = current.activeTools.filter((t) => t.id !== toolCallId);
+      if (next.length === current.activeTools.length) return state;
+      return {
+        sessionStateById: {
+          ...state.sessionStateById,
+          [sessionId]: { ...current, activeTools: next },
+        },
+      };
+    }),
 
   setError: (sessionId, error) =>
     set((state) => {

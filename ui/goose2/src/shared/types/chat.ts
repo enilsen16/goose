@@ -28,6 +28,12 @@ export const INITIAL_TOKEN_STATE: TokenState = {
   contextLimit: 0,
 };
 
+export interface ActiveToolEntry {
+  id: string;
+  name: string;
+  startedAt: number;
+}
+
 export interface SessionChatRuntime {
   chatState: ChatState;
   tokenState: TokenState;
@@ -36,6 +42,7 @@ export interface SessionChatRuntime {
   pendingAssistantProviderId: string | null;
   error: string | null;
   hasUnread: boolean;
+  activeTools: ActiveToolEntry[];
 }
 
 export const INITIAL_SESSION_CHAT_RUNTIME: SessionChatRuntime = {
@@ -46,6 +53,7 @@ export const INITIAL_SESSION_CHAT_RUNTIME: SessionChatRuntime = {
   pendingAssistantProviderId: null,
   error: null,
   hasUnread: false,
+  activeTools: [],
 };
 
 // Session

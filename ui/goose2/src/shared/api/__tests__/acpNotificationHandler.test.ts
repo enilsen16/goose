@@ -886,4 +886,90 @@ describe("acpNotificationHandler", () => {
       count: 4,
     });
   });
+
+  describe("activeTools tracking", () => {
+    it("adds an entry on a live tool_call and clears it on terminal update", async () => {
+      registerPreparedSession("acp-session", "goose", "/Users/aharvard");
+      setActiveMessageId("acp-session", "assistant-1");
+
+      await handleSessionNotification({
+        sessionId: "acp-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-active",
+          title: "shell",
+          _meta: { goose: { toolCall: { toolName: "shell" } } },
+        },
+      } as never);
+
+      const runtime = useChatStore.getState().getSessionRuntime("acp-session");
+      expect(runtime.activeTools).toEqual([
+        expect.objectContaining({ id: "tool-active", name: "shell" }),
+      ]);
+
+      await handleSessionNotification({
+        sessionId: "acp-session",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-active",
+          status: "completed",
+        },
+      } as never);
+
+      expect(
+        useChatStore.getState().getSessionRuntime("acp-session").activeTools,
+      ).toEqual([]);
+    });
+
+    it("recovers from an update-before-call by creating the entry", async () => {
+      registerPreparedSession("acp-session", "goose", "/Users/aharvard");
+      setActiveMessageId("acp-session", "assistant-1");
+
+      await handleSessionNotification({
+        sessionId: "acp-session",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-orphan",
+          title: "search_issues",
+          _meta: { goose: { toolCall: { toolName: "search_issues" } } },
+        },
+      } as never);
+
+      expect(
+        useChatStore.getState().getSessionRuntime("acp-session").activeTools,
+      ).toEqual([
+        expect.objectContaining({
+          id: "tool-orphan",
+          name: "search_issues",
+        }),
+      ]);
+    });
+
+    it("removes the entry when a non-terminal update is followed by a failed update", async () => {
+      registerPreparedSession("acp-session", "goose", "/Users/aharvard");
+      setActiveMessageId("acp-session", "assistant-1");
+
+      await handleSessionNotification({
+        sessionId: "acp-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "tool-fail",
+          title: "shell",
+        },
+      } as never);
+
+      await handleSessionNotification({
+        sessionId: "acp-session",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "tool-fail",
+          status: "failed",
+        },
+      } as never);
+
+      expect(
+        useChatStore.getState().getSessionRuntime("acp-session").activeTools,
+      ).toEqual([]);
+    });
+  });
 });

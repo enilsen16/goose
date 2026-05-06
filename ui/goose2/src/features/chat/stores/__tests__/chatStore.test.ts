@@ -310,4 +310,75 @@ describe("chatStore session loading state", () => {
 
     expect(useChatStore.getState().loadingSessionIds.size).toBe(0);
   });
+
+  describe("activeTools", () => {
+    it("appends entries on startToolCall", () => {
+      const store = useChatStore.getState();
+      store.startToolCall("s1", { id: "t1", name: "shell", startedAt: 1 });
+      store.startToolCall("s1", {
+        id: "t2",
+        name: "execute_typescript",
+        startedAt: 2,
+      });
+
+      expect(getRuntime("s1").activeTools).toEqual([
+        { id: "t1", name: "shell", startedAt: 1 },
+        { id: "t2", name: "execute_typescript", startedAt: 2 },
+      ]);
+    });
+
+    it("ignores duplicate startToolCall for the same id", () => {
+      const store = useChatStore.getState();
+      store.startToolCall("s1", { id: "t1", name: "shell", startedAt: 1 });
+      store.startToolCall("s1", { id: "t1", name: "shell", startedAt: 99 });
+
+      expect(getRuntime("s1").activeTools).toEqual([
+        { id: "t1", name: "shell", startedAt: 1 },
+      ]);
+    });
+
+    it("removes entries on endToolCall", () => {
+      const store = useChatStore.getState();
+      store.startToolCall("s1", { id: "t1", name: "shell", startedAt: 1 });
+      store.startToolCall("s1", {
+        id: "t2",
+        name: "search",
+        startedAt: 2,
+      });
+      store.endToolCall("s1", "t1");
+
+      expect(getRuntime("s1").activeTools).toEqual([
+        { id: "t2", name: "search", startedAt: 2 },
+      ]);
+    });
+
+    it("is a no-op when endToolCall targets a missing id", () => {
+      const store = useChatStore.getState();
+      const before = useChatStore.getState().sessionStateById;
+      store.endToolCall("s1", "missing");
+
+      expect(useChatStore.getState().sessionStateById).toBe(before);
+    });
+
+    it("clears activeTools when chatState transitions to idle", () => {
+      const store = useChatStore.getState();
+      store.setChatState("s1", "streaming");
+      store.startToolCall("s1", { id: "t1", name: "shell", startedAt: 1 });
+      expect(getRuntime("s1").activeTools).toHaveLength(1);
+
+      store.setChatState("s1", "idle");
+
+      expect(getRuntime("s1").activeTools).toEqual([]);
+    });
+
+    it("preserves activeTools across non-idle chatState transitions", () => {
+      const store = useChatStore.getState();
+      store.startToolCall("s1", { id: "t1", name: "shell", startedAt: 1 });
+      store.setChatState("s1", "streaming");
+      expect(getRuntime("s1").activeTools).toHaveLength(1);
+
+      store.setChatState("s1", "thinking");
+      expect(getRuntime("s1").activeTools).toHaveLength(1);
+    });
+  });
 });

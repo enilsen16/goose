@@ -119,6 +119,7 @@ export function ChatView({
                     | "waiting"
                     | "compacting"
                 }
+                activeTool={controller.activeTool}
               />
             ) : null}
           </AnimatePresence>

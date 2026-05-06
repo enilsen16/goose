@@ -113,7 +113,8 @@
   "loading": {
     "compacting": "Compactando conversación...",
     "thinking": "Pensando...",
-    "responding": "Respondiendo..."
+    "responding": "Respondiendo...",
+    "callingTool": "Llamando a {{name}}..."
   },
   "mention": {
     "ariaLabel": "Sugerencias de menciones",

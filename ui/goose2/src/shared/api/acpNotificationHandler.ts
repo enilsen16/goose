@@ -358,12 +358,28 @@ function handleLive(sessionId: string, update: SessionUpdate): void {
       };
       store.setStreamingMessageId(sessionId, messageId);
       store.appendToStreamingMessage(sessionId, toolRequest);
+      store.startToolCall(sessionId, {
+        id: update.toolCallId,
+        name: identity.toolName ?? update.title ?? "",
+        startedAt: Date.now(),
+      });
       break;
     }
 
     case "tool_call_update": {
       const identity = getToolCallIdentity(update);
       const chainSummary = getToolChainSummary(update);
+      const isTerminal =
+        update.status === "completed" || update.status === "failed";
+      if (isTerminal) {
+        store.endToolCall(sessionId, update.toolCallId);
+      } else {
+        store.startToolCall(sessionId, {
+          id: update.toolCallId,
+          name: identity.toolName ?? update.title ?? "",
+          startedAt: Date.now(),
+        });
+      }
       // Late-arriving updates (chain summaries, async titles) can target a
       // tool call whose request lives in an older message than the currently
       // streaming one. Patch the message that actually owns the tool call,

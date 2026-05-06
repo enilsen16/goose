@@ -100,6 +100,9 @@ export function useChatSessionController({
   const hasContextUsageSnapshot = useChatStore(
     (s) => s.sessionStateById[stateSessionId]?.hasUsageSnapshot ?? false,
   );
+  const activeTool = useChatStore(
+    (s) => s.sessionStateById[stateSessionId]?.activeTools[0],
+  );
   const selectedProvider =
     pendingProviderId ??
     session?.providerId ??
@@ -701,6 +704,7 @@ export function useChatSessionController({
     sessionArtifactCwd,
     messages,
     chatState,
+    activeTool,
     tokenState: resolvedTokenState,
     stopStreaming,
     streamingMessageId,
