@@ -16,13 +16,13 @@ use fs_err as fs;
 use goose::acp::server::AcpProviderFactory;
 use goose::config::base::CONFIG_YAML_NAME;
 use goose::config::GooseMode;
-use goose::session::{EnabledExtensionsState, ExtensionData};
 use goose::conversation::message::Message;
 use goose::model::ModelConfig;
 use goose::providers::base::{
     stream_from_single_message, MessageStream, Provider, ProviderUsage, Usage,
 };
 use goose::providers::errors::ProviderError;
+use goose::session::{EnabledExtensionsState, ExtensionData};
 use goose_test_support::{McpFixture, FAKE_CODE, TEST_IMAGE_B64, TEST_MODEL};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
@@ -346,11 +346,10 @@ pub async fn run_persist_extension_data_on_new_session<C: Connection>() {
         .unwrap();
     // The ACP protocol session id is a UUID, but the goose-internal session
     // id (the DB row id) is a separate identifier. Query the only row.
-    let extension_data_json: String =
-        sqlx::query_scalar("SELECT extension_data FROM sessions")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let extension_data_json: String = sqlx::query_scalar("SELECT extension_data FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     let extension_data: ExtensionData = serde_json::from_str(&extension_data_json)
         .expect("extension_data column should be valid ExtensionData JSON");
     let state = EnabledExtensionsState::from_extension_data(&extension_data)
