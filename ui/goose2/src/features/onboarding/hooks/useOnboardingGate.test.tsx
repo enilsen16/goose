@@ -5,7 +5,7 @@ import { useAgentStore } from "@/features/agents/stores/agentStore";
 import { setStoredModelPreference } from "@/features/chat/lib/modelPreferences";
 import { useProviderCatalogStore } from "@/features/providers/stores/providerCatalogStore";
 import { useProviderInventoryStore } from "@/features/providers/stores/providerInventoryStore";
-import { ONBOARDING_STORAGE_KEY } from "../types";
+import { ONBOARDING_RESET_REQUESTED_KEY } from "../types";
 import { useOnboardingGate } from "./useOnboardingGate";
 
 function providerEntry(
@@ -39,17 +39,6 @@ function providerEntry(
   };
 }
 
-function writeCompletedOnboarding(providerId = "anthropic", modelId?: string) {
-  window.localStorage.setItem(
-    ONBOARDING_STORAGE_KEY,
-    JSON.stringify({
-      completedAt: "2026-05-05T12:00:00.000Z",
-      providerId,
-      modelId,
-    }),
-  );
-}
-
 describe("useOnboardingGate", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -81,17 +70,47 @@ describe("useOnboardingGate", () => {
     ]);
   });
 
-  it("shows onboarding after startup when there is no completed state", () => {
+  it("skips onboarding when the user has a usable provider", () => {
     useProviderInventoryStore.getState().setEntries([providerEntry({})]);
 
     const { result } = renderHook(() => useOnboardingGate(true));
 
-    expect(result.current.shouldShowOnboarding).toBe(true);
+    expect(result.current.shouldShowOnboarding).toBe(false);
+    expect(result.current.readiness.isUsable).toBe(true);
     expect(result.current.readiness.reason).toBe("ready");
   });
 
-  it("skips onboarding when completion and the selected Goose model are usable", () => {
-    writeCompletedOnboarding("anthropic", "claude-sonnet-4-5");
+  it("reopens onboarding after an explicit reset, even with a usable provider", () => {
+    useProviderInventoryStore.getState().setEntries([providerEntry({})]);
+
+    const { result, rerender } = renderHook(() => useOnboardingGate(true));
+    expect(result.current.shouldShowOnboarding).toBe(false);
+
+    act(() => result.current.resetOnboarding());
+    rerender();
+
+    expect(result.current.shouldShowOnboarding).toBe(true);
+    expect(window.localStorage.getItem(ONBOARDING_RESET_REQUESTED_KEY)).toBe(
+      "1",
+    );
+  });
+
+  it("shows onboarding for new users with no usable provider", () => {
+    useProviderInventoryStore.getState().setEntries([
+      providerEntry({
+        configured: false,
+        models: [],
+      }),
+    ]);
+
+    const { result } = renderHook(() => useOnboardingGate(true));
+
+    expect(result.current.shouldShowOnboarding).toBe(true);
+    expect(result.current.readiness.isUsable).toBe(false);
+    expect(result.current.readiness.reason).toBe("missing_provider");
+  });
+
+  it("skips onboarding when the selected Goose model is usable", () => {
     setStoredModelPreference("goose", {
       providerId: "anthropic",
       modelId: "claude-sonnet-4-5",
@@ -106,8 +125,7 @@ describe("useOnboardingGate", () => {
     expect(result.current.readiness.providerId).toBe("anthropic");
   });
 
-  it("reopens onboarding when the completed Goose provider is no longer usable", () => {
-    writeCompletedOnboarding("anthropic", "claude-sonnet-4-5");
+  it("reopens onboarding when the Goose provider is no longer usable", () => {
     setStoredModelPreference("goose", {
       providerId: "anthropic",
       modelId: "claude-sonnet-4-5",
@@ -127,8 +145,7 @@ describe("useOnboardingGate", () => {
     expect(result.current.readiness.reason).toBe("missing_provider");
   });
 
-  it("treats a completed ACP agent provider with models as usable", () => {
-    writeCompletedOnboarding("claude-acp", "claude-acp-session");
+  it("treats an ACP agent provider with models as usable", () => {
     useAgentStore.setState({ selectedProvider: "claude-acp" });
     useProviderInventoryStore.getState().setEntries([
       providerEntry({
@@ -157,7 +174,6 @@ describe("useOnboardingGate", () => {
   });
 
   it("falls back to a usable Goose model when the selected ACP agent is unusable", () => {
-    writeCompletedOnboarding("claude-acp", "claude-acp-session");
     setStoredModelPreference("goose", {
       providerId: "anthropic",
       modelId: "claude-sonnet-4-5",
@@ -185,21 +201,20 @@ describe("useOnboardingGate", () => {
     expect(result.current.readiness.reason).toBe("ready");
   });
 
-  it("persists completion from the onboarding flow", () => {
+  it("clears the reset flag when onboarding completes", () => {
+    window.localStorage.setItem(ONBOARDING_RESET_REQUESTED_KEY, "1");
+    useProviderInventoryStore.getState().setEntries([providerEntry({})]);
+
     const { result } = renderHook(() => useOnboardingGate(true));
+    expect(result.current.shouldShowOnboarding).toBe(true);
 
     act(() => {
-      result.current.completeOnboarding({
-        providerId: "anthropic",
-        modelId: "claude-sonnet-4-5",
-      });
+      result.current.completeOnboarding();
     });
 
     expect(
-      JSON.parse(window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}"),
-    ).toMatchObject({
-      providerId: "anthropic",
-      modelId: "claude-sonnet-4-5",
-    });
+      window.localStorage.getItem(ONBOARDING_RESET_REQUESTED_KEY),
+    ).toBeNull();
+    expect(result.current.shouldShowOnboarding).toBe(false);
   });
 });

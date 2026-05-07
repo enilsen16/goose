@@ -2,41 +2,37 @@ import { useCallback, useMemo, useState } from "react";
 import type { ProviderInventoryEntryDto } from "@aaif/goose-sdk";
 import { useAgentStore } from "@/features/agents/stores/agentStore";
 import {
-  getModelProviders,
-  resolveAgentProviderCatalogIdStrict,
+  getModelProvidersFromEntries,
+  resolveAgentProviderCatalogIdStrictFromEntries,
 } from "@/features/providers/providerCatalog";
 import { useProviderInventory } from "@/features/providers/hooks/useProviderInventory";
+import { useProviderCatalogStore } from "@/features/providers/stores/providerCatalogStore";
 import { useDistroStore } from "@/features/settings/stores/distroStore";
 import { filterModelProvidersForDistro } from "@/features/providers/distroProviderConstraints";
 import { getStoredModelPreference } from "@/features/chat/lib/modelPreferences";
 import {
+  ONBOARDING_RESET_REQUESTED_KEY,
   ONBOARDING_STORAGE_KEY,
-  type OnboardingCompletion,
   type OnboardingReadiness,
 } from "../types";
 
-function readCompletion(): OnboardingCompletion | null {
-  try {
-    const raw = localStorage.getItem(ONBOARDING_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<OnboardingCompletion>;
-    if (!parsed.completedAt || !parsed.providerId) return null;
-    return {
-      completedAt: parsed.completedAt,
-      providerId: parsed.providerId,
-      modelId: parsed.modelId,
-    };
-  } catch {
-    return null;
+function readResetRequested(): boolean {
+  return localStorage.getItem(ONBOARDING_RESET_REQUESTED_KEY) === "1";
+}
+
+function writeResetRequested(value: boolean) {
+  if (value) {
+    localStorage.setItem(ONBOARDING_RESET_REQUESTED_KEY, "1");
+  } else {
+    localStorage.removeItem(ONBOARDING_RESET_REQUESTED_KEY);
   }
 }
 
-function writeCompletion(completion: OnboardingCompletion) {
-  localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(completion));
-}
-
 export function resetOnboardingCompletion() {
+  writeResetRequested(true);
+  // Opportunistic cleanup of legacy keys from the prior gate design.
   localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+  localStorage.removeItem("goose:onboarding:grandfathered:v1");
 }
 
 function firstUsableModel(entry: ProviderInventoryEntryDto) {
@@ -51,24 +47,33 @@ export function useOnboardingGate(startupReady: boolean) {
   const selectedProvider = useAgentStore((state) => state.selectedProvider);
   const { entries, configuredModelProviderEntries, getModelsForAgent } =
     useProviderInventory();
+  const catalogEntries = useProviderCatalogStore((state) => state.entries);
   const distro = useDistroStore((state) => state.manifest);
-  const [completion, setCompletion] = useState<OnboardingCompletion | null>(
-    readCompletion,
-  );
+  const [resetRequested, setResetRequested] =
+    useState<boolean>(readResetRequested);
 
+  // Subscribe to catalogEntries so the memo recomputes when the catalog
+  // populates from the backend. The previous version called getModelProviders()
+  // (which reads via .getState()) and only listed `distro` as a dependency,
+  // which left modelProviderIds permanently empty and broke the gate's
+  // configuredEntry fallback for users with a working provider.
   const modelProviderIds = useMemo(
     () =>
       new Set(
-        filterModelProvidersForDistro(getModelProviders(), distro).map(
-          (provider) => provider.id,
-        ),
+        filterModelProvidersForDistro(
+          getModelProvidersFromEntries(catalogEntries),
+          distro,
+        ).map((provider) => provider.id),
       ),
-    [distro],
+    [catalogEntries, distro],
   );
 
   const readiness = useMemo<OnboardingReadiness>(() => {
     const selectedAgentId =
-      resolveAgentProviderCatalogIdStrict(selectedProvider) ?? "goose";
+      resolveAgentProviderCatalogIdStrictFromEntries(
+        catalogEntries,
+        selectedProvider,
+      ) ?? "goose";
 
     if (selectedAgentId !== "goose") {
       const models = getModelsForAgent(selectedAgentId);
@@ -76,7 +81,6 @@ export function useOnboardingGate(startupReady: boolean) {
       const isReady = !!entry?.configured && models.length > 0;
       if (isReady) {
         return {
-          hasCompletedOnboarding: !!completion,
           isUsable: true,
           providerId: selectedAgentId,
           modelId: models[0]?.id,
@@ -94,7 +98,6 @@ export function useOnboardingGate(startupReady: boolean) {
       );
       if (entry?.configured && modelStillExists) {
         return {
-          hasCompletedOnboarding: !!completion,
           isUsable: true,
           providerId: storedGooseModel.providerId ?? "goose",
           modelId: storedGooseModel.modelId,
@@ -115,7 +118,6 @@ export function useOnboardingGate(startupReady: boolean) {
 
     if (configuredEntry && model) {
       return {
-        hasCompletedOnboarding: !!completion,
         isUsable: true,
         providerId: configuredEntry.providerId,
         modelId: model.id,
@@ -125,13 +127,12 @@ export function useOnboardingGate(startupReady: boolean) {
     }
 
     return {
-      hasCompletedOnboarding: !!completion,
       isUsable: false,
       providerId: null,
-      reason: completion ? "missing_provider" : "not_completed",
+      reason: "missing_provider",
     };
   }, [
-    completion,
+    catalogEntries,
     configuredModelProviderEntries,
     entries,
     getModelsForAgent,
@@ -139,29 +140,20 @@ export function useOnboardingGate(startupReady: boolean) {
     selectedProvider,
   ]);
 
-  const completeOnboarding = useCallback(
-    (next: Omit<OnboardingCompletion, "completedAt">) => {
-      const completionValue = {
-        ...next,
-        completedAt: new Date().toISOString(),
-      };
-      writeCompletion(completionValue);
-      setCompletion(completionValue);
-    },
-    [],
-  );
+  const completeOnboarding = useCallback(() => {
+    writeResetRequested(false);
+    setResetRequested(false);
+  }, []);
 
   const resetOnboarding = useCallback(() => {
     resetOnboardingCompletion();
-    setCompletion(null);
+    setResetRequested(true);
   }, []);
 
   return {
-    completion,
     readiness,
     shouldShowOnboarding:
-      startupReady &&
-      (!readiness.hasCompletedOnboarding || !readiness.isUsable),
+      startupReady && (resetRequested || !readiness.isUsable),
     completeOnboarding,
     resetOnboarding,
   };

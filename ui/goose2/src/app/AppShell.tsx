@@ -801,8 +801,8 @@ export function AppShell({ children }: { children?: React.ReactNode }) {
     return (
       <OnboardingFlow
         readiness={onboardingGate.readiness}
-        onComplete={(setup) => {
-          onboardingGate.completeOnboarding(setup);
+        onComplete={() => {
+          onboardingGate.completeOnboarding();
           setActiveView("home");
         }}
       />

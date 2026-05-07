@@ -7,6 +7,8 @@ import type {
 } from "@aaif/goose-sdk";
 
 export const ONBOARDING_STORAGE_KEY = "goose:onboarding:v1";
+// Set when the user explicitly requests onboarding be redone; cleared on completion.
+export const ONBOARDING_RESET_REQUESTED_KEY = "goose:onboarding:reset:v1";
 
 export type {
   DefaultsReadResponse,
@@ -15,19 +17,12 @@ export type {
   OnboardingImportCounts,
 };
 
-export interface OnboardingCompletion {
-  completedAt: string;
-  providerId: string;
-  modelId?: string;
-}
-
 export interface OnboardingReadiness {
-  hasCompletedOnboarding: boolean;
   isUsable: boolean;
   providerId: string | null;
   modelId?: string;
   modelName?: string;
-  reason: "ready" | "not_completed" | "missing_provider" | "missing_model";
+  reason: "ready" | "missing_provider" | "missing_model";
 }
 
 export type OnboardingStep = "import" | "provider" | "tour";

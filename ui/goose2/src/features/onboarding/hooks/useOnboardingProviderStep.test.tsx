@@ -65,7 +65,6 @@ function readyReadiness(
   overrides: Partial<OnboardingReadiness> = {},
 ): OnboardingReadiness {
   return {
-    hasCompletedOnboarding: true,
     isUsable: true,
     providerId: "anthropic",
     modelId: "claude-sonnet-4-5",
