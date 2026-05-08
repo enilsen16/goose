@@ -173,8 +173,9 @@ export function ChatView({
                 }),
             }}
             contextUsage={{
-              contextTokens: controller.tokenState.accumulatedTotal,
+              contextTokens: controller.tokenState.totalTokens,
               contextLimit: controller.tokenState.contextLimit,
+              accumulatedTotal: controller.tokenState.accumulatedTotal,
               isContextUsageReady: controller.isContextUsageReady,
               onCompactContext: controller.compactConversation,
               canCompactContext: controller.canCompactContext,

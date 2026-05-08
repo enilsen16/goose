@@ -42,6 +42,18 @@ import type {
 const NO_PROJECT_VALUE = "__no_project__";
 const CREATE_PROJECT_VALUE = "__create_project__";
 
+// Accumulated-token thresholds. Sums every model call's input + output across
+// the session, so the number grows fast. Values flag runaway sessions before
+// a billing surprise; tune in one place.
+const ACCUMULATED_WARN = 1_000_000;
+const ACCUMULATED_DANGER = 5_000_000;
+
+function accumulatedColorClass(total: number): string {
+  if (total >= ACCUMULATED_DANGER) return "text-danger";
+  if (total >= ACCUMULATED_WARN) return "text-warning";
+  return "text-foreground-tertiary";
+}
+
 interface ChatInputToolbarComposerActions {
   canSend: boolean;
   isStreaming: boolean;
@@ -102,6 +114,7 @@ export function ChatInputToolbar({
   const {
     contextTokens = 0,
     contextLimit = 0,
+    accumulatedTotal = 0,
     isContextUsageReady,
     supportsCompactionControls,
     canCompactContext = false,
@@ -174,6 +187,8 @@ export function ChatInputToolbar({
       compactDisplay: "short",
       maximumFractionDigits: value < 10_000 ? 1 : 0,
     });
+
+  const accumulatedClass = accumulatedColorClass(accumulatedTotal);
 
   const handleProjectValueChange = (value: string) => {
     if (value === CREATE_PROJECT_VALUE) {
@@ -339,6 +354,18 @@ export function ChatInputToolbar({
                     </div>
                     <div className="shrink-0">{usedPercentLabel}</div>
                   </div>
+                  {accumulatedTotal > 0 ? (
+                    <div className="flex items-center justify-between gap-3 text-xs text-foreground-tertiary">
+                      <div className="truncate">
+                        {t("toolbar.accumulatedSession")}
+                      </div>
+                      <div className={cn("shrink-0", accumulatedClass)}>
+                        {t("toolbar.accumulatedTokens", {
+                          tokens: formatCompactTokenCount(accumulatedTotal),
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
                   {compactionControlsSupported ? (
                     <div className="flex items-center gap-1 pt-0.5">
                       <Button
