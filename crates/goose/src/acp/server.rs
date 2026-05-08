@@ -2975,6 +2975,12 @@ impl GooseAcpAgent {
         let mut was_cancelled = false;
         let mut first_event_logged = false;
         let mut event_count: u32 = 0;
+        // Tracks whether the prompt cycle produced any visible/actionable
+        // assistant output. Streaming reasoning models often yield several
+        // intermediate `AgentEvent::Message`s that are thinking-only — only
+        // the cumulative state at end-of-prompt tells us if the turn was
+        // truly empty.
+        let mut had_visible_assistant_content = false;
         // Streaming chain buffer: tracks consecutive tool requests across
         // `AgentEvent::Message` events so chains that span multiple rows are
         // still registered. Sequential tool use (Bedrock/Anthropic) yields
@@ -3005,13 +3011,11 @@ impl GooseAcpAgent {
 
             match event {
                 Ok(crate::agents::AgentEvent::Message(message)) => {
-                    // Detect malformed model responses (e.g. providers that emit
-                    // only an empty `<think>` block with no text or tool call)
-                    // and fail loudly instead of letting the turn end silently.
-                    if message.role == Role::Assistant && message.is_visibly_empty() {
-                        return Err(agent_client_protocol::Error::internal_error().with_detail(
-                            "The model returned an empty response. Try again, change reasoning settings, or switch model.",
-                        ));
+                    if !had_visible_assistant_content
+                        && message.role == Role::Assistant
+                        && !message.is_visibly_empty()
+                    {
+                        had_visible_assistant_content = true;
                     }
 
                     // Agent persists messages via session_manager.add_message() internally.
@@ -3096,6 +3100,16 @@ impl GooseAcpAgent {
                 extend_chain_membership(&chain_buffer, &mut session.chain_membership);
                 session.cancel_token = None;
             }
+        }
+
+        // Surface "the model produced nothing" (e.g. openrouter/free emitting
+        // only empty `<think>` blocks) so goose2 can show a system-notification
+        // bubble instead of going silent. Cancellation is a user-requested stop,
+        // not a model failure — don't error on it.
+        if !was_cancelled && !had_visible_assistant_content {
+            return Err(agent_client_protocol::Error::internal_error().with_detail(
+                "The model returned an empty response. Try again, change reasoning settings, or switch model.",
+            ));
         }
 
         self.send_usage_update(&args.session_id, &agent, cx).await?;
