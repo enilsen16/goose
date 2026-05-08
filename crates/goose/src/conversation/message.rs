@@ -915,6 +915,20 @@ impl Message {
             .any(|c| matches!(c, MessageContent::ToolResponse(_)))
     }
 
+    /// True if this message produced nothing the user or the agent loop can act on:
+    /// no tool calls, no rendered text, no images, no other actionable content —
+    /// only thinking blocks (possibly empty), redacted thinking, or whitespace text.
+    /// Used by the agent loop to detect malformed model responses (e.g. providers
+    /// that return only an empty `<think>` block) and surface them as errors instead
+    /// of silently ending the turn.
+    pub fn is_visibly_empty(&self) -> bool {
+        self.content.iter().all(|c| match c {
+            MessageContent::Thinking(_) | MessageContent::RedactedThinking(_) => true,
+            MessageContent::Text(t) => t.text.trim().is_empty(),
+            _ => false,
+        })
+    }
+
     /// Retrieves all tool `id` from the message
     pub fn get_tool_ids(&self) -> HashSet<&str> {
         self.content
@@ -1756,5 +1770,75 @@ mod tests {
         });
         let req_no_summary = make_tool_request(Some(meta_no_summary));
         assert!(req_no_summary.persisted_chain_summary().is_none());
+    }
+
+    #[test]
+    fn is_visibly_empty_true_for_no_content() {
+        assert!(Message::assistant().is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_true_for_only_whitespace_thinking() {
+        let msg = Message::assistant().with_thinking("\n", "");
+        assert!(msg.is_visibly_empty());
+
+        let msg = Message::assistant().with_thinking("   \t\n  ", "sig");
+        assert!(msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_true_for_substantive_thinking_with_no_text() {
+        // The model "thought" but produced no visible/actionable output —
+        // still an empty turn from the user's perspective.
+        let msg = Message::assistant().with_thinking("Let me consider this carefully.", "");
+        assert!(msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_true_for_only_redacted_thinking() {
+        let msg = Message::assistant().with_redacted_thinking("opaque");
+        assert!(msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_true_for_thinking_plus_whitespace_text() {
+        let msg = Message::assistant()
+            .with_thinking("\n", "")
+            .with_text("   ");
+        assert!(msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_false_for_visible_text() {
+        let msg = Message::assistant().with_text("Hello");
+        assert!(!msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_false_for_thinking_plus_visible_text() {
+        let msg = Message::assistant()
+            .with_thinking("reasoning", "")
+            .with_text("Done.");
+        assert!(!msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_false_for_tool_request() {
+        let msg = Message::assistant().with_tool_request(
+            "tool1",
+            Ok(CallToolRequestParams::new("shell").with_arguments(object!({"command": "ls"}))),
+        );
+        assert!(!msg.is_visibly_empty());
+    }
+
+    #[test]
+    fn is_visibly_empty_false_for_thinking_plus_tool_request() {
+        let msg = Message::assistant()
+            .with_thinking("plan", "")
+            .with_tool_request(
+                "tool1",
+                Ok(CallToolRequestParams::new("shell").with_arguments(object!({"command": "ls"}))),
+            );
+        assert!(!msg.is_visibly_empty());
     }
 }

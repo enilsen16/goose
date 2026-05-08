@@ -2985,6 +2985,20 @@ impl GooseAcpAgent {
 
             match event {
                 Ok(crate::agents::AgentEvent::Message(message)) => {
+                    // Detect malformed model responses (e.g. providers that emit
+                    // only an empty `<think>` block with no text or tool call)
+                    // and fail loudly instead of letting the turn end silently.
+                    // Set `message` (not just `data`) — goose2's getErrorMessage()
+                    // reads error.message, and InternalError's default is the
+                    // unhelpful string "Internal error".
+                    if message.role == Role::Assistant && message.is_visibly_empty() {
+                        let detail = "The model returned an empty response. Try again, change reasoning settings, or switch model.";
+                        let mut err = agent_client_protocol::Error::internal_error();
+                        err.message = detail.to_string();
+                        err.data = Some(serde_json::json!(detail));
+                        return Err(err);
+                    }
+
                     // Agent persists messages via session_manager.add_message() internally.
                     let stored_message_id = message.id.clone();
 
