@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 
 impl HandleDispatchFrom<Client> for GooseAcpHandler {
@@ -97,7 +98,7 @@ impl HandleDispatchFrom<Client> for GooseAcpHandler {
                         cx.spawn(async move {
                             let cx = cx_spawn;
                             let value_id = req.value.as_value_id()
-                                .ok_or_else(|| agent_client_protocol::Error::invalid_params().data("Expected a value ID"))?
+                                .ok_or_else(|| agent_client_protocol::Error::invalid_params().with_detail("Expected a value ID"))?
                                 .clone();
                             let session_id = req.session_id.clone();
                             let sid = sid_short(session_id.0.as_ref());
@@ -125,7 +126,7 @@ impl HandleDispatchFrom<Client> for GooseAcpHandler {
                                 }
                                 other => {
                                     responder.respond_with_error(
-                                        agent_client_protocol::Error::invalid_params().data(format!("Unsupported config option: {}", other))
+                                        agent_client_protocol::Error::invalid_params().with_detail(format!("Unsupported config option: {}", other))
                                     )?;
                                     return Ok(());
                                 }

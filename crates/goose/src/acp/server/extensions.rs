@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 
 impl GooseAcpAgent {
@@ -7,7 +8,7 @@ impl GooseAcpAgent {
     ) -> Result<EmptyResponse, agent_client_protocol::Error> {
         let session_id = &req.session_id;
         let config: ExtensionConfig = serde_json::from_value(req.config).map_err(|e| {
-            agent_client_protocol::Error::invalid_params().data(format!("bad config: {e}"))
+            agent_client_protocol::Error::invalid_params().with_detail(format!("bad config: {e}"))
         })?;
         let agent = self.get_session_agent(&req.session_id, None).await?;
         agent
@@ -69,7 +70,7 @@ impl GooseAcpAgent {
             serde_json::Value::Object(obj) => obj,
             _ => {
                 return Err(agent_client_protocol::Error::invalid_params()
-                    .data("extensionConfig must be a JSON object"));
+                    .with_detail("extensionConfig must be a JSON object"));
             }
         };
         obj.insert(
@@ -79,7 +80,8 @@ impl GooseAcpAgent {
 
         let config: crate::agents::ExtensionConfig =
             serde_json::from_value(serde_json::Value::Object(obj)).map_err(|e| {
-                agent_client_protocol::Error::invalid_params().data(format!("bad config: {e}"))
+                agent_client_protocol::Error::invalid_params()
+                    .with_detail(format!("bad config: {e}"))
             })?;
 
         crate::config::extensions::set_extension(crate::config::extensions::ExtensionEntry {
@@ -96,7 +98,7 @@ impl GooseAcpAgent {
         let keys = crate::config::extensions::get_all_extension_names();
         if !keys.iter().any(|k| k == &req.config_key) {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data(format!("Extension '{}' not found", req.config_key)));
+                .with_detail(format!("Extension '{}' not found", req.config_key)));
         }
         crate::config::extensions::remove_extension(&req.config_key);
         Ok(EmptyResponse {})
@@ -109,7 +111,7 @@ impl GooseAcpAgent {
         let keys = crate::config::extensions::get_all_extension_names();
         if !keys.iter().any(|k| k == &req.config_key) {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data(format!("Extension '{}' not found", req.config_key)));
+                .with_detail(format!("Extension '{}' not found", req.config_key)));
         }
         crate::config::extensions::set_extension_enabled(&req.config_key, req.enabled);
         Ok(EmptyResponse {})

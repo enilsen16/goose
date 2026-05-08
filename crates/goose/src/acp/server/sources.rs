@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 
 impl GooseAcpAgent {

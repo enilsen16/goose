@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 use crate::agents::reply_parts::is_tool_visible_to_app;
 use rmcp::model::CallToolRequestParams;
@@ -27,12 +28,14 @@ impl GooseAcpAgent {
         let tools = agent.list_tools(session_id, None).await;
 
         let Some(tool) = tools.iter().find(|t| *t.name == req.name) else {
-            return Err(agent_client_protocol::Error::invalid_params().data("tool not found"));
+            return Err(
+                agent_client_protocol::Error::invalid_params().with_detail("tool not found")
+            );
         };
 
         if !is_tool_visible_to_app(tool) {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data("tool is not visible to app clients"));
+                .with_detail("tool is not visible to app clients"));
         }
 
         let arguments = match req.arguments {
@@ -40,7 +43,7 @@ impl GooseAcpAgent {
             serde_json::Value::Null => None,
             _ => {
                 return Err(agent_client_protocol::Error::invalid_params()
-                    .data("tool arguments must be an object"));
+                    .with_detail("tool arguments must be an object"));
             }
         };
 
@@ -57,19 +60,22 @@ impl GooseAcpAgent {
             .extension_manager
             .dispatch_tool_call(&ctx, tool_call, CancellationToken::new())
             .await
-            .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+            .map_err(|e| {
+                agent_client_protocol::Error::internal_error().with_detail(e.to_string())
+            })?;
 
-        let result = tool_result
-            .result
-            .await
-            .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+        let result = tool_result.result.await.map_err(|e| {
+            agent_client_protocol::Error::internal_error().with_detail(e.to_string())
+        })?;
 
         let content = result
             .content
             .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+            .map_err(|e| {
+                agent_client_protocol::Error::internal_error().with_detail(e.to_string())
+            })?;
 
         Ok(GooseToolCallResponse {
             content,

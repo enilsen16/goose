@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 #[cfg(feature = "local-inference")]
 use crate::dictation::providers::transcribe_local;
@@ -25,7 +26,7 @@ impl GooseAcpAgent {
         #[cfg(not(feature = "local-inference"))]
         if req.provider == "local" {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data("Local inference is not available in this build"));
+                .with_detail("Local inference is not available in this build"));
         }
 
         let provider: DictationProvider = serde_json::from_value(serde_json::Value::String(
@@ -33,17 +34,16 @@ impl GooseAcpAgent {
         ))
         .map_err(|_| {
             agent_client_protocol::Error::invalid_params()
-                .data(format!("Unknown provider: {}", req.provider))
+                .with_detail(format!("Unknown provider: {}", req.provider))
         })?;
 
         let audio_bytes = BASE64.decode(&req.audio).map_err(|_| {
-            agent_client_protocol::Error::invalid_params().data("Invalid base64 audio data")
+            agent_client_protocol::Error::invalid_params().with_detail("Invalid base64 audio data")
         })?;
 
         if audio_bytes.len() > 50 * 1024 * 1024 {
-            return Err(
-                agent_client_protocol::Error::invalid_params().data("Audio too large (max 50MB)")
-            );
+            return Err(agent_client_protocol::Error::invalid_params()
+                .with_detail("Audio too large (max 50MB)"));
         }
 
         let extension = match req.mime_type.as_str() {
@@ -54,7 +54,7 @@ impl GooseAcpAgent {
             "audio/wav" | "audio/x-wav" => "wav",
             other => {
                 return Err(agent_client_protocol::Error::invalid_params()
-                    .data(format!("Unsupported format: {other}")));
+                    .with_detail(format!("Unsupported format: {other}")));
             }
         };
 
@@ -191,7 +191,7 @@ impl GooseAcpAgent {
             use crate::download_manager::get_download_manager;
 
             let model = whisper::get_model(&_req.model_id).ok_or_else(|| {
-                agent_client_protocol::Error::invalid_params().data("Unknown model id")
+                agent_client_protocol::Error::invalid_params().with_detail("Unknown model id")
             })?;
             let manager = get_download_manager();
             let model_id_for_config = model.id.to_string();
@@ -234,7 +234,8 @@ impl GooseAcpAgent {
         }
 
         #[cfg(not(feature = "local-inference"))]
-        Err(agent_client_protocol::Error::invalid_params().data("Local inference not enabled"))
+        Err(agent_client_protocol::Error::invalid_params()
+            .with_detail("Local inference not enabled"))
     }
 
     pub(super) async fn on_dictation_model_download_progress(
@@ -282,7 +283,8 @@ impl GooseAcpAgent {
         }
 
         #[cfg(not(feature = "local-inference"))]
-        Err(agent_client_protocol::Error::invalid_params().data("Local inference not enabled"))
+        Err(agent_client_protocol::Error::invalid_params()
+            .with_detail("Local inference not enabled"))
     }
 
     pub(super) async fn on_dictation_model_delete(
@@ -292,14 +294,13 @@ impl GooseAcpAgent {
         #[cfg(feature = "local-inference")]
         {
             let model = whisper::get_model(&_req.model_id).ok_or_else(|| {
-                agent_client_protocol::Error::invalid_params().data("Unknown model id")
+                agent_client_protocol::Error::invalid_params().with_detail("Unknown model id")
             })?;
             let path = model.local_path();
 
             if !path.exists() {
-                return Err(
-                    agent_client_protocol::Error::invalid_params().data("Model not downloaded")
-                );
+                return Err(agent_client_protocol::Error::invalid_params()
+                    .with_detail("Model not downloaded"));
             }
 
             std::fs::remove_file(path).internal_err()?;
@@ -308,7 +309,8 @@ impl GooseAcpAgent {
         }
 
         #[cfg(not(feature = "local-inference"))]
-        Err(agent_client_protocol::Error::invalid_params().data("Local inference not enabled"))
+        Err(agent_client_protocol::Error::invalid_params()
+            .with_detail("Local inference not enabled"))
     }
 
     pub(super) async fn on_dictation_model_select(
@@ -317,9 +319,8 @@ impl GooseAcpAgent {
     ) -> Result<EmptyResponse, agent_client_protocol::Error> {
         #[cfg(not(feature = "local-inference"))]
         if req.provider == "local" {
-            return Err(
-                agent_client_protocol::Error::invalid_params().data("Local inference not enabled")
-            );
+            return Err(agent_client_protocol::Error::invalid_params()
+                .with_detail("Local inference not enabled"));
         }
 
         let provider: DictationProvider = serde_json::from_value(serde_json::Value::String(
@@ -327,7 +328,7 @@ impl GooseAcpAgent {
         ))
         .map_err(|_| {
             agent_client_protocol::Error::invalid_params()
-                .data(format!("Unknown provider: {}", req.provider))
+                .with_detail(format!("Unknown provider: {}", req.provider))
         })?;
 
         let key = match provider {
@@ -337,11 +338,11 @@ impl GooseAcpAgent {
             #[cfg(feature = "local-inference")]
             DictationProvider::Local => {
                 let model = whisper::get_model(&req.model_id).ok_or_else(|| {
-                    agent_client_protocol::Error::invalid_params().data("Unknown model id")
+                    agent_client_protocol::Error::invalid_params().with_detail("Unknown model id")
                 })?;
                 if !model.is_downloaded() {
                     return Err(agent_client_protocol::Error::invalid_params()
-                        .data("Local Whisper model is not downloaded"));
+                        .with_detail("Local Whisper model is not downloaded"));
                 }
                 whisper::LOCAL_WHISPER_MODEL_CONFIG_KEY
             }
@@ -359,7 +360,8 @@ fn parse_dictation_provider(
     provider: &str,
 ) -> Result<DictationProvider, agent_client_protocol::Error> {
     serde_json::from_value(serde_json::Value::String(provider.to_string())).map_err(|_| {
-        agent_client_protocol::Error::invalid_params().data(format!("Unknown provider: {provider}"))
+        agent_client_protocol::Error::invalid_params()
+            .with_detail(format!("Unknown provider: {provider}"))
     })
 }
 
@@ -368,7 +370,7 @@ fn dictation_secret_config_key(
 ) -> Result<&'static str, agent_client_protocol::Error> {
     let def = get_provider_def(provider);
     if def.uses_provider_config {
-        return Err(agent_client_protocol::Error::invalid_params().data(
+        return Err(agent_client_protocol::Error::invalid_params().with_detail(
             "Dictation provider uses the main provider configuration. Configure its credentials in provider settings instead.",
         ));
     }
@@ -376,7 +378,7 @@ fn dictation_secret_config_key(
     #[cfg(feature = "local-inference")]
     if provider == DictationProvider::Local {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("Dictation provider does not use an API key or secret."));
+            .with_detail("Dictation provider does not use an API key or secret."));
     }
 
     Ok(def.config_key)

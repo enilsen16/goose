@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 use crate::config::declarative_providers;
 use std::str::FromStr;
@@ -250,7 +251,7 @@ fn normalize_custom_provider_engine(engine: &str) -> Result<String, agent_client
     let engine = engine.trim().to_lowercase();
     if declarative_providers::ProviderEngine::from_str(&engine).is_err() {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data(format!("Unsupported custom provider engine: {engine}")));
+            .with_detail(format!("Unsupported custom provider engine: {engine}")));
     }
 
     match engine.as_str() {
@@ -264,9 +265,8 @@ fn normalize_custom_provider_engine(engine: &str) -> Result<String, agent_client
 fn non_empty_trimmed(value: String, field: &str) -> Result<String, agent_client_protocol::Error> {
     let value = value.trim().to_string();
     if value.is_empty() {
-        return Err(
-            agent_client_protocol::Error::invalid_params().data(format!("{field} cannot be empty"))
-        );
+        return Err(agent_client_protocol::Error::invalid_params()
+            .with_detail(format!("{field} cannot be empty")));
     }
     Ok(value)
 }
@@ -286,12 +286,11 @@ fn normalize_custom_provider_upsert(
     provider.display_name = non_empty_trimmed(provider.display_name, "displayName")?;
     provider.api_url = non_empty_trimmed(provider.api_url, "apiUrl")?;
     let url = url::Url::parse(&provider.api_url).map_err(|_| {
-        agent_client_protocol::Error::invalid_params().data("apiUrl must be a valid URL")
+        agent_client_protocol::Error::invalid_params().with_detail("apiUrl must be a valid URL")
     })?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(
-            agent_client_protocol::Error::invalid_params().data("apiUrl must use HTTP or HTTPS")
-        );
+        return Err(agent_client_protocol::Error::invalid_params()
+            .with_detail("apiUrl must use HTTP or HTTPS"));
     }
 
     provider.api_key = provider.api_key.and_then(|api_key| {
@@ -299,7 +298,9 @@ fn normalize_custom_provider_upsert(
         (!api_key.is_empty()).then_some(api_key)
     });
     if require_api_key && provider.requires_auth && provider.api_key.is_none() {
-        return Err(agent_client_protocol::Error::invalid_params().data("apiKey cannot be empty"));
+        return Err(
+            agent_client_protocol::Error::invalid_params().with_detail("apiKey cannot be empty")
+        );
     }
     provider.models = provider
         .models
@@ -310,7 +311,9 @@ fn normalize_custom_provider_upsert(
         })
         .collect();
     if provider.models.is_empty() {
-        return Err(agent_client_protocol::Error::invalid_params().data("models cannot be empty"));
+        return Err(
+            agent_client_protocol::Error::invalid_params().with_detail("models cannot be empty")
+        );
     }
 
     provider.headers = provider
@@ -324,11 +327,11 @@ fn normalize_custom_provider_upsert(
             }
             reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|_| {
                 agent_client_protocol::Error::invalid_params()
-                    .data(format!("Invalid header name: {key}"))
+                    .with_detail(format!("Invalid header name: {key}"))
             })?;
             reqwest::header::HeaderValue::from_str(&value).map_err(|_| {
                 agent_client_protocol::Error::invalid_params()
-                    .data(format!("Invalid header value for: {key}"))
+                    .with_detail(format!("Invalid header value for: {key}"))
             })?;
             Ok(Some((key, value)))
         })
@@ -351,11 +354,11 @@ fn load_declarative_provider_for_client(
     declarative_providers::load_provider(provider_id).map_err(|error| {
         if error.to_string().contains("Provider not found") {
             agent_client_protocol::Error::invalid_params()
-                .data(format!("Unknown provider: {provider_id}"))
+                .with_detail(format!("Unknown provider: {provider_id}"))
         } else if error.to_string().contains("Invalid provider id") {
-            agent_client_protocol::Error::invalid_params().data(error.to_string())
+            agent_client_protocol::Error::invalid_params().with_detail(error.to_string())
         } else {
-            agent_client_protocol::Error::internal_error().data(error.to_string())
+            agent_client_protocol::Error::internal_error().with_detail(error.to_string())
         }
     })
 }
@@ -445,7 +448,9 @@ impl GooseAcpAgent {
         let formats = match req.format {
             Some(format) => vec![format
                 .parse::<crate::providers::catalog::ProviderFormat>()
-                .map_err(|error| agent_client_protocol::Error::invalid_params().data(error))?],
+                .map_err(|error| {
+                    agent_client_protocol::Error::invalid_params().with_detail(error)
+                })?],
             None => vec![
                 crate::providers::catalog::ProviderFormat::OpenAI,
                 crate::providers::catalog::ProviderFormat::Anthropic,
@@ -490,7 +495,7 @@ impl GooseAcpAgent {
         let template = crate::providers::catalog::get_provider_template(&req.provider_id)
             .ok_or_else(|| {
                 agent_client_protocol::Error::invalid_params()
-                    .data(format!("Unknown catalog provider: {}", req.provider_id))
+                    .with_detail(format!("Unknown catalog provider: {}", req.provider_id))
             })?;
         Ok(ProviderCatalogTemplateResponse {
             template: provider_template_to_dto(template),
@@ -555,7 +560,7 @@ impl GooseAcpAgent {
         let loaded = load_declarative_provider_for_client(&req.provider_id)?;
         if !loaded.is_editable {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data(format!("Provider is not editable: {}", req.provider_id)));
+                .with_detail(format!("Provider is not editable: {}", req.provider_id)));
         }
 
         let provider = normalize_custom_provider_upsert(req.provider, false)?;
@@ -566,8 +571,9 @@ impl GooseAcpAgent {
                 loaded.config.api_key_env.clone()
             };
             if Config::global().get_secret::<String>(&api_key_env).is_err() {
-                return Err(agent_client_protocol::Error::invalid_params()
-                    .data("apiKey is required when auth is enabled and no secret is stored"));
+                return Err(agent_client_protocol::Error::invalid_params().with_detail(
+                    "apiKey is required when auth is enabled and no secret is stored",
+                ));
             }
         }
         declarative_providers::update_custom_provider(
@@ -610,11 +616,11 @@ impl GooseAcpAgent {
         let loaded = load_declarative_provider_for_client(&req.provider_id)?;
         if !loaded.is_editable {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data(format!("Provider is not editable: {}", req.provider_id)));
+                .with_detail(format!("Provider is not editable: {}", req.provider_id)));
         }
 
         if Config::global().get_goose_provider().ok().as_deref() == Some(req.provider_id.as_str()) {
-            return Err(agent_client_protocol::Error::invalid_params().data(format!(
+            return Err(agent_client_protocol::Error::invalid_params().with_detail(format!(
                 "Cannot delete active provider: {}",
                 req.provider_id
             )));
@@ -831,15 +837,17 @@ impl GooseAcpAgent {
                 .find(|config_key| config_key.name == field.key)
             else {
                 return Err(agent_client_protocol::Error::invalid_params()
-                    .data(format!("Unsupported provider config field: {}", field.key)));
+                    .with_detail(format!("Unsupported provider config field: {}", field.key)));
             };
 
             let value = field.value.trim();
             if value.is_empty() {
-                return Err(agent_client_protocol::Error::invalid_params().data(format!(
-                    "Provider config field cannot be empty: {}",
-                    field.key
-                )));
+                return Err(
+                    agent_client_protocol::Error::invalid_params().with_detail(format!(
+                        "Provider config field cannot be empty: {}",
+                        field.key
+                    )),
+                );
             }
 
             if config_key.secret {
@@ -910,10 +918,12 @@ impl GooseAcpAgent {
             .invalid_params_err_ctx("Unknown provider")?;
         let metadata = entry.metadata().clone();
         if !metadata.config_keys.iter().any(|key| key.oauth_flow) {
-            return Err(agent_client_protocol::Error::invalid_params().data(format!(
-                "Provider does not support native authentication: {}",
-                req.provider_id
-            )));
+            return Err(
+                agent_client_protocol::Error::invalid_params().with_detail(format!(
+                    "Provider does not support native authentication: {}",
+                    req.provider_id
+                )),
+            );
         }
 
         let provider = entry
