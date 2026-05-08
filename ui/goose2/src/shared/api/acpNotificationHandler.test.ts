@@ -68,4 +68,31 @@ describe("acpNotificationHandler", () => {
     expect(runtime.tokenState.accumulatedInput).toBe(0);
     expect(runtime.tokenState.accumulatedOutput).toBe(0);
   });
+
+  it("does not change store state when usage update is identical", async () => {
+    const notification = {
+      sessionId: "acp-session-1",
+      update: {
+        sessionUpdate: "usage_update",
+        used: 512,
+        size: 8192,
+        _meta: {
+          "goose.accumulatedTotal": 12_345,
+          "goose.accumulatedInput": 11_000,
+          "goose.accumulatedOutput": 1_345,
+        },
+      },
+    } as SessionNotification;
+
+    await handleSessionNotification(notification);
+    const sessionStateAfterFirst =
+      useChatStore.getState().sessionStateById["acp-session-1"];
+
+    await handleSessionNotification(notification);
+    const sessionStateAfterSecond =
+      useChatStore.getState().sessionStateById["acp-session-1"];
+
+    // Same reference → no zustand subscriber notification, no re-renders.
+    expect(sessionStateAfterSecond).toBe(sessionStateAfterFirst);
+  });
 });

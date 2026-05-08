@@ -337,8 +337,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // Token tracking
   updateTokenState: (sessionId, partial) =>
     set((state) => {
-      const current =
-        state.sessionStateById[sessionId]?.tokenState ?? INITIAL_TOKEN_STATE;
+      const existing = state.sessionStateById[sessionId];
+      const current = existing?.tokenState ?? INITIAL_TOKEN_STATE;
       const inputTokens = partial.inputTokens ?? current.inputTokens;
       const outputTokens = partial.outputTokens ?? current.outputTokens;
       const accumulatedInput =
@@ -349,21 +349,37 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         current.accumulatedOutput + (partial.outputTokens ?? 0);
       const accumulatedTotal =
         partial.accumulatedTotal ?? accumulatedInput + accumulatedOutput;
+      const next = {
+        inputTokens,
+        outputTokens,
+        totalTokens: partial.totalTokens ?? inputTokens + outputTokens,
+        accumulatedInput,
+        accumulatedOutput,
+        accumulatedTotal,
+        contextLimit: partial.contextLimit ?? current.contextLimit,
+      };
+      // Skip the set when nothing changed — usage_update notifications fire
+      // per-turn even when token totals haven't moved (e.g. tool-only turns
+      // that don't bill new input). Returning the same `state` ref means
+      // zustand subscribers don't re-render.
+      if (
+        existing?.hasUsageSnapshot &&
+        next.inputTokens === current.inputTokens &&
+        next.outputTokens === current.outputTokens &&
+        next.totalTokens === current.totalTokens &&
+        next.accumulatedInput === current.accumulatedInput &&
+        next.accumulatedOutput === current.accumulatedOutput &&
+        next.accumulatedTotal === current.accumulatedTotal &&
+        next.contextLimit === current.contextLimit
+      ) {
+        return state;
+      }
       return {
         sessionStateById: {
           ...state.sessionStateById,
           [sessionId]: {
-            ...(state.sessionStateById[sessionId] ??
-              createInitialSessionRuntime()),
-            tokenState: {
-              inputTokens,
-              outputTokens,
-              totalTokens: partial.totalTokens ?? inputTokens + outputTokens,
-              accumulatedInput,
-              accumulatedOutput,
-              accumulatedTotal,
-              contextLimit: partial.contextLimit ?? current.contextLimit,
-            },
+            ...(existing ?? createInitialSessionRuntime()),
+            tokenState: next,
             hasUsageSnapshot: true,
           },
         },
