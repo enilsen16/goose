@@ -971,7 +971,7 @@ fn build_mode_state(
     for &name in GooseMode::VARIANTS {
         let goose_mode: GooseMode = name.parse().map_err(|_| {
             agent_client_protocol::Error::internal_error() // impossible but satisfy linters
-                .data(format!("Failed to parse GooseMode variant: {}", name))
+                .with_detail(format!("Failed to parse GooseMode variant: {}", name))
         })?;
         let mut mode = SessionMode::new(SessionModeId::new(name), name);
         mode.description = goose_mode.get_message().map(Into::into);
@@ -1456,7 +1456,7 @@ impl GooseAcpAgent {
                 if let Err(e) = state.to_extension_data(&mut extension_data) {
                     warn!(error = %e, sid = %sid, "failed to serialize intended extension state");
                 } else if let Err(e) = session_manager
-                    .update(&internal_session_id)
+                    .update(&setup_session_id)
                     .extension_data(extension_data)
                     .apply()
                     .await
@@ -1568,7 +1568,7 @@ impl GooseAcpAgent {
             // reads of `extension_data` reflect what's really registered.
             // Runs unconditionally — partial failures still get their
             // successes recorded.
-            if let Err(e) = agent.persist_extension_state(&internal_session_id).await {
+            if let Err(e) = agent.persist_extension_state(&setup_session_id).await {
                 warn!(error = %e, sid = %sid, "failed to persist extension state after phase 2");
             }
 
@@ -2591,7 +2591,7 @@ impl GooseAcpAgent {
         let mut sessions = self.sessions.lock().await;
         let session = sessions.get_mut(session_id).ok_or_else(|| {
             agent_client_protocol::Error::resource_not_found(Some(session_id.to_string()))
-                .data(format!("Session not found: {}", session_id))
+                .with_detail(format!("Session not found: {}", session_id))
         })?;
         if let Some(token) = cancel_token {
             session.cancel_token = Some(token);
@@ -2715,7 +2715,7 @@ impl GooseAcpAgent {
             .await
             .map_err(|_| {
                 agent_client_protocol::Error::resource_not_found(Some(session_id.clone()))
-                    .data(format!("Session not found: {}", session_id))
+                    .with_detail(format!("Session not found: {}", session_id))
             })?;
         debug!(target: "perf", sid = %sid, ms = t0.elapsed().as_millis() as u64, "perf: load_session get_session");
         let loaded_mode = goose_session.goose_mode;
@@ -3076,8 +3076,7 @@ impl GooseAcpAgent {
                         // still fires for the final state. Errors are logged
                         // but don't fail the prompt — a transient notification
                         // hiccup shouldn't tank a multi-minute agent run.
-                        if let Err(e) = self.send_usage_update(&args.session_id, &agent, cx).await
-                        {
+                        if let Err(e) = self.send_usage_update(&args.session_id, &agent, cx).await {
                             tracing::warn!(error = %e.message, "per-turn usage update failed");
                         }
                     }
@@ -3129,8 +3128,10 @@ impl GooseAcpAgent {
         };
 
         let mut response = PromptResponse::new(stop_reason);
-        if let Some(usage) = build_prompt_usage(&session) {
-            response = response.usage(usage);
+        if let Ok(session) = self.session_manager.get_session(&session_id, false).await {
+            if let Some(usage) = build_prompt_usage(&session) {
+                response = response.usage(usage);
+            }
         }
         Ok(response)
     }
