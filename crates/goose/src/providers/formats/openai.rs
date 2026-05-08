@@ -1310,7 +1310,7 @@ pub fn create_request_with_options(
         };
         payload
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| anyhow!("openai payload must be a JSON object"))?
             .insert(key.to_string(), json!(max_tokens));
     }
 
