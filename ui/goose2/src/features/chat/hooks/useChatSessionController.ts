@@ -84,9 +84,9 @@ export function useChatSessionController({
     (s) =>
       s.skillDraftsBySession[PENDING_HOME_SESSION_ID] ?? EMPTY_SKILL_DRAFTS,
   );
-  const pendingQueuedMessage = useChatStore(
-    (s) => s.queuedMessageBySession[PENDING_HOME_SESSION_ID] ?? null,
-  );
+  // The pending-state sync effect below reads queued/draft/skill values via
+  // useChatStore.getState() so it no longer needs to subscribe via a
+  // selector here. Subscribing was forcing a re-run on every keystroke.
   const effectiveProjectId =
     pendingProjectId !== undefined
       ? pendingProjectId
@@ -559,9 +559,6 @@ export function useChatSessionController({
     }
 
     let cancelled = false;
-    void pendingDraftValue;
-    void pendingSkillDrafts;
-    void pendingQueuedMessage;
 
     const syncPendingHomeState = async () => {
       const chatState = useChatStore.getState();
@@ -679,15 +676,17 @@ export function useChatSessionController({
       cancelled = true;
     };
   }, [
+    // Body reads pending drafts/skills/queued-message via useChatStore.getState()
+    // so they're not deps; only metadata fields that the body actually closes
+    // over need to trigger re-sync. Watching the draft/skills/queued values
+    // here used to fire this effect on every keystroke into the pending home
+    // session.
     activeWorkspace?.path,
     catalogEntries,
-    pendingDraftValue,
-    pendingSkillDrafts,
     pendingModelSelection,
     pendingPersonaId,
     pendingProjectId,
     pendingProviderId,
-    pendingQueuedMessage,
     prepareCurrentSession,
     selectedProvider,
     session?.agentId,
