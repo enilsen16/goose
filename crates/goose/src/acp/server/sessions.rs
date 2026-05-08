@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 
 impl GooseAcpAgent {
@@ -8,13 +9,12 @@ impl GooseAcpAgent {
         let working_dir = req.working_dir.trim().to_string();
         if working_dir.is_empty() {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data("working directory cannot be empty"));
+                .with_detail("working directory cannot be empty"));
         }
         let path = std::path::PathBuf::from(&working_dir);
         if !path.exists() || !path.is_dir() {
-            return Err(
-                agent_client_protocol::Error::invalid_params().data("invalid directory path")
-            );
+            return Err(agent_client_protocol::Error::invalid_params()
+                .with_detail("invalid directory path"));
         }
         let session_id = &req.session_id;
         self.session_manager
@@ -104,7 +104,9 @@ impl GooseAcpAgent {
             .user_provided_name(req.title)
             .apply()
             .await
-            .map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))?;
+            .map_err(|e| {
+                agent_client_protocol::Error::internal_error().with_detail(e.to_string())
+            })?;
         Ok(EmptyResponse {})
     }
 

@@ -105,21 +105,39 @@ trait ResultExt<T> {
     fn invalid_params_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error>;
 }
 
+/// Extension to set both `message` and `data` on an ACP `Error` from a single
+/// detail string. Goose2's getErrorMessage() reads error.message, and the
+/// upstream constructors (internal_error, invalid_params, etc.) leave it as
+/// the JSON-RPC default ("Internal error", "Invalid params"), so any error
+/// detail attached only to `data` is invisible in the UI.
+pub(super) trait AcpErrorExt {
+    fn with_detail(self, detail: impl Into<String>) -> Self;
+}
+
+impl AcpErrorExt for agent_client_protocol::Error {
+    fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        let s = detail.into();
+        self.message = s.clone();
+        self.data = Some(serde_json::Value::String(s));
+        self
+    }
+}
+
 impl<T, E: std::fmt::Display> ResultExt<T> for Result<T, E> {
     fn internal_err(self) -> Result<T, agent_client_protocol::Error> {
-        self.map_err(|e| agent_client_protocol::Error::internal_error().data(e.to_string()))
+        self.map_err(|e| agent_client_protocol::Error::internal_error().with_detail(e.to_string()))
     }
     fn invalid_params_err(self) -> Result<T, agent_client_protocol::Error> {
-        self.map_err(|e| agent_client_protocol::Error::invalid_params().data(e.to_string()))
+        self.map_err(|e| agent_client_protocol::Error::invalid_params().with_detail(e.to_string()))
     }
     fn internal_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error> {
         self.map_err(|e| {
-            agent_client_protocol::Error::internal_error().data(format!("{context}: {e}"))
+            agent_client_protocol::Error::internal_error().with_detail(format!("{context}: {e}"))
         })
     }
     fn invalid_params_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error> {
         self.map_err(|e| {
-            agent_client_protocol::Error::invalid_params().data(format!("{context}: {e}"))
+            agent_client_protocol::Error::invalid_params().with_detail(format!("{context}: {e}"))
         })
     }
 }
@@ -2606,11 +2624,11 @@ impl GooseAcpAgent {
             .await
             .map_err(|_| {
                 agent_client_protocol::Error::internal_error()
-                    .data("Agent setup task was dropped".to_string())
+                    .with_detail("Agent setup task was dropped".to_string())
             })?;
         match guard.as_ref().unwrap() {
             Ok(AgentSetupProgress::FullyReady(agent)) => Ok(agent.clone()),
-            Err(e) => Err(agent_client_protocol::Error::internal_error().data(e.clone())),
+            Err(e) => Err(agent_client_protocol::Error::internal_error().with_detail(e.clone())),
             // wait_for predicate excludes ProviderReady
             _ => unreachable!(),
         }
@@ -2630,14 +2648,14 @@ impl GooseAcpAgent {
         // Any signal (ProviderReady, FullyReady, or Err) unblocks us.
         let guard = rx.wait_for(|v| v.is_some()).await.map_err(|_| {
             agent_client_protocol::Error::internal_error()
-                .data("Agent setup task was dropped".to_string())
+                .with_detail("Agent setup task was dropped".to_string())
         })?;
         match guard.as_ref().unwrap() {
             Ok(progress) => match progress {
                 AgentSetupProgress::ProviderReady(agent)
                 | AgentSetupProgress::FullyReady(agent) => Ok(agent.clone()),
             },
-            Err(e) => Err(agent_client_protocol::Error::internal_error().data(e.clone())),
+            Err(e) => Err(agent_client_protocol::Error::internal_error().with_detail(e.clone())),
         }
     }
 
@@ -2651,7 +2669,7 @@ impl GooseAcpAgent {
             let config = match mcp_server_to_extension_config(mcp_server) {
                 Ok(c) => c,
                 Err(msg) => {
-                    return Err(agent_client_protocol::Error::invalid_params().data(msg));
+                    return Err(agent_client_protocol::Error::invalid_params().with_detail(msg));
                 }
             };
             configs.push(config);
@@ -2668,10 +2686,12 @@ impl GooseAcpAgent {
         for result in &results {
             if !result.success {
                 let error_msg = result.error.as_deref().unwrap_or("unknown error");
-                return Err(agent_client_protocol::Error::internal_error().data(format!(
-                    "Failed to add MCP server '{}': {}",
-                    result.name, error_msg
-                )));
+                return Err(
+                    agent_client_protocol::Error::internal_error().with_detail(format!(
+                        "Failed to add MCP server '{}': {}",
+                        result.name, error_msg
+                    )),
+                );
             }
         }
         Ok(())
@@ -2988,15 +3008,10 @@ impl GooseAcpAgent {
                     // Detect malformed model responses (e.g. providers that emit
                     // only an empty `<think>` block with no text or tool call)
                     // and fail loudly instead of letting the turn end silently.
-                    // Set `message` (not just `data`) — goose2's getErrorMessage()
-                    // reads error.message, and InternalError's default is the
-                    // unhelpful string "Internal error".
                     if message.role == Role::Assistant && message.is_visibly_empty() {
-                        let detail = "The model returned an empty response. Try again, change reasoning settings, or switch model.";
-                        let mut err = agent_client_protocol::Error::internal_error();
-                        err.message = detail.to_string();
-                        err.data = Some(serde_json::json!(detail));
-                        return Err(err);
+                        return Err(agent_client_protocol::Error::internal_error().with_detail(
+                            "The model returned an empty response. Try again, change reasoning settings, or switch model.",
+                        ));
                     }
 
                     // Agent persists messages via session_manager.add_message() internally.
@@ -3005,7 +3020,7 @@ impl GooseAcpAgent {
                     let mut sessions = self.sessions.lock().await;
                     let session = sessions.get_mut(&session_id).ok_or_else(|| {
                         agent_client_protocol::Error::invalid_params()
-                            .data(format!("Session not found: {}", session_id))
+                            .with_detail(format!("Session not found: {}", session_id))
                     })?;
 
                     let is_assistant = message.role == Role::Assistant;
@@ -3066,7 +3081,7 @@ impl GooseAcpAgent {
                 Ok(_) => {}
                 Err(e) => {
                     return Err(agent_client_protocol::Error::internal_error()
-                        .data(format!("Error in agent response stream: {}", e)));
+                        .with_detail(format!("Error in agent response stream: {}", e)));
                 }
             }
         }
@@ -3185,7 +3200,7 @@ impl GooseAcpAgent {
             .internal_err()?;
         let Some(inventory) = inventory else {
             return Err(agent_client_protocol::Error::internal_error()
-                .data(format!("Unknown provider inventory: {}", provider_name)));
+                .with_detail(format!("Unknown provider inventory: {}", provider_name)));
         };
         let model_state = build_model_state(current_model.as_str(), &inventory);
         let mode_state = build_mode_state(goose_mode)?;
@@ -3210,7 +3225,7 @@ impl GooseAcpAgent {
     ) -> Result<SetSessionModeResponse, agent_client_protocol::Error> {
         let mode = mode_id.parse::<GooseMode>().map_err(|_| {
             agent_client_protocol::Error::invalid_params()
-                .data(format!("Invalid mode: {}", mode_id))
+                .with_detail(format!("Invalid mode: {}", mode_id))
         })?;
 
         let agent = self.get_session_agent_provider_ready(session_id).await?;

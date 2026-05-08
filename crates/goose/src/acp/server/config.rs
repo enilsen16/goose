@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 
 impl GooseAcpAgent {
@@ -19,7 +20,9 @@ impl GooseAcpAgent {
                 Ok(value) => value,
                 Err(crate::config::ConfigError::NotFound(_)) => serde_json::Value::Null,
                 Err(e) => {
-                    return Err(agent_client_protocol::Error::internal_error().data(e.to_string()))
+                    return Err(
+                        agent_client_protocol::Error::internal_error().with_detail(e.to_string())
+                    )
                 }
             };
             values.push(PreferenceValue { key, value });
@@ -74,9 +77,8 @@ impl GooseAcpAgent {
     ) -> Result<DefaultsReadResponse, agent_client_protocol::Error> {
         let provider_id = req.provider_id.trim().to_string();
         if provider_id.is_empty() {
-            return Err(
-                agent_client_protocol::Error::invalid_params().data("providerId cannot be empty")
-            );
+            return Err(agent_client_protocol::Error::invalid_params()
+                .with_detail("providerId cannot be empty"));
         }
 
         let model_id = req.model_id.and_then(|model| {
@@ -94,21 +96,23 @@ impl GooseAcpAgent {
             .find(|entry| entry.provider_id == provider_id)
         else {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data(format!("Unknown provider: {provider_id}")));
+                .with_detail(format!("Unknown provider: {provider_id}")));
         };
 
         if !entry.configured {
             return Err(agent_client_protocol::Error::invalid_params()
-                .data(format!("Provider is not configured: {provider_id}")));
+                .with_detail(format!("Provider is not configured: {provider_id}")));
         }
 
         if let Some(model_id) = model_id.as_deref() {
             let model_exists = entry.default_model == model_id
                 || entry.models.iter().any(|model| model.id == model_id);
             if !model_exists {
-                return Err(agent_client_protocol::Error::invalid_params().data(format!(
-                    "Model '{model_id}' is not available for provider '{provider_id}'"
-                )));
+                return Err(
+                    agent_client_protocol::Error::invalid_params().with_detail(format!(
+                        "Model '{model_id}' is not available for provider '{provider_id}'"
+                    )),
+                );
             }
         }
 
@@ -173,7 +177,7 @@ fn preference_def(
         .find(|def| def.key == key)
         .ok_or_else(|| {
             agent_client_protocol::Error::internal_error()
-                .data(format!("Missing preference definition for {key:?}"))
+                .with_detail(format!("Missing preference definition for {key:?}"))
         })
 }
 
@@ -182,11 +186,11 @@ fn validate_auto_compact_threshold(
 ) -> Result<(), agent_client_protocol::Error> {
     let Some(value) = value.as_f64() else {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("autoCompactThreshold must be a number"));
+            .with_detail("autoCompactThreshold must be a number"));
     };
     if !value.is_finite() || value <= 0.0 || value > 1.0 {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("autoCompactThreshold must be greater than 0 and at most 1"));
+            .with_detail("autoCompactThreshold must be greater than 0 and at most 1"));
     }
 
     Ok(())
@@ -197,7 +201,7 @@ fn validate_voice_auto_submit_phrases(
 ) -> Result<(), agent_client_protocol::Error> {
     if !value.is_string() {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("voiceAutoSubmitPhrases must be a string"));
+            .with_detail("voiceAutoSubmitPhrases must be a string"));
     }
 
     Ok(())
@@ -208,11 +212,11 @@ fn validate_voice_dictation_provider(
 ) -> Result<(), agent_client_protocol::Error> {
     let Some(value) = value.as_str() else {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("voiceDictationProvider must be a string"));
+            .with_detail("voiceDictationProvider must be a string"));
     };
     if !is_supported_voice_dictation_provider(value) {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("voiceDictationProvider is not supported"));
+            .with_detail("voiceDictationProvider is not supported"));
     }
 
     Ok(())
@@ -223,11 +227,11 @@ fn validate_voice_dictation_preferred_mic(
 ) -> Result<(), agent_client_protocol::Error> {
     let Some(value) = value.as_str() else {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("voiceDictationPreferredMic must be a string"));
+            .with_detail("voiceDictationPreferredMic must be a string"));
     };
     if value.is_empty() {
         return Err(agent_client_protocol::Error::invalid_params()
-            .data("voiceDictationPreferredMic must be non-empty"));
+            .with_detail("voiceDictationPreferredMic must be non-empty"));
     }
 
     Ok(())
@@ -253,6 +257,6 @@ fn optional_config_string(
     match config.get_param::<String>(key) {
         Ok(value) => Ok(Some(value)),
         Err(crate::config::ConfigError::NotFound(_)) => Ok(None),
-        Err(e) => Err(agent_client_protocol::Error::internal_error().data(e.to_string())),
+        Err(e) => Err(agent_client_protocol::Error::internal_error().with_detail(e.to_string())),
     }
 }

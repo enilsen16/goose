@@ -1,3 +1,4 @@
+use super::AcpErrorExt;
 use super::*;
 
 impl GooseAcpAgent {
@@ -9,7 +10,7 @@ impl GooseAcpAgent {
             (Some(pid), _) if !req.global => {
                 let dirs = crate::sources::project_working_dirs(pid);
                 Some(dirs.into_iter().next().ok_or_else(|| {
-                    agent_client_protocol::Error::invalid_params().data(format!(
+                    agent_client_protocol::Error::invalid_params().with_detail(format!(
                         "Project \"{pid}\" has no working directories configured"
                     ))
                 })?)
