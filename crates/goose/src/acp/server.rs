@@ -12,7 +12,9 @@ use crate::config::extensions::get_enabled_extensions_with_config;
 use crate::config::paths::Paths;
 use crate::config::permission::PermissionManager;
 use crate::config::{Config, GooseMode};
-use crate::conversation::message::{ActionRequiredData, Message, MessageContent, ToolRequest};
+use crate::conversation::message::{
+    ActionRequiredData, Message, MessageContent, SystemNotificationType, ToolRequest,
+};
 use crate::mcp_utils::ToolResult;
 use crate::permission::permission_confirmation::PrincipalType;
 use crate::permission::{Permission, PermissionConfirmation};
@@ -1218,6 +1220,25 @@ const META_ACCUMULATED_TOTAL: &str = "goose.accumulatedTotal";
 const META_ACCUMULATED_INPUT: &str = "goose.accumulatedInput";
 const META_ACCUMULATED_OUTPUT: &str = "goose.accumulatedOutput";
 
+/// `_meta` key on `SessionInfoUpdate` carrying transient agent-side notifications
+/// (e.g. "goose is compacting the conversation..."). Mirrored on the frontend.
+const META_SYSTEM_NOTIFICATION: &str = "goose.systemNotification";
+
+/// Map an agent system-notification message to a stable `event` string the UI
+/// can switch on. The original notification messages are defined in
+/// `crates/goose/src/agents/agent.rs` (e.g. `COMPACTION_THINKING_TEXT`); we
+/// detect them here so the wire contract is a stable enum-like field instead
+/// of brittle text matching across the goose↔goose2 boundary.
+fn classify_system_notification(msg: &str) -> Option<&'static str> {
+    if msg.starts_with("goose is compacting") {
+        Some("compacting")
+    } else if msg == "Compaction complete" {
+        Some("compaction_complete")
+    } else {
+        None
+    }
+}
+
 fn accumulated_meta(session: &Session) -> serde_json::Map<String, serde_json::Value> {
     let mut meta = serde_json::Map::new();
     if let Some(v) = to_nonnegative_u64(session.accumulated_total_tokens) {
@@ -1931,6 +1952,34 @@ impl GooseAcpAgent {
                         prompt.clone(),
                     )?;
                 }
+            }
+            MessageContent::SystemNotification(notification) => {
+                // Forward transient agent signals (e.g. "goose is compacting...")
+                // to the UI via SessionInfoUpdate._meta. The notification is
+                // also persisted on the assistant message; this path makes it
+                // visible live, before session reload.
+                let kind = match notification.notification_type {
+                    SystemNotificationType::ThinkingMessage => "thinkingMessage",
+                    SystemNotificationType::InlineMessage => "inlineMessage",
+                    SystemNotificationType::CreditsExhausted => "creditsExhausted",
+                };
+                let event = classify_system_notification(&notification.msg);
+                let mut payload = serde_json::Map::new();
+                payload.insert("type".to_string(), kind.into());
+                payload.insert("msg".to_string(), notification.msg.clone().into());
+                if let Some(event) = event {
+                    payload.insert("event".to_string(), event.into());
+                }
+
+                let mut meta = serde_json::Map::new();
+                meta.insert(
+                    META_SYSTEM_NOTIFICATION.to_string(),
+                    serde_json::Value::Object(payload),
+                );
+                cx.send_notification(SessionNotification::new(
+                    session_id.clone(),
+                    SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(meta)),
+                ))?;
             }
             _ => {}
         }
@@ -4739,6 +4788,24 @@ print(\"hello, world\")
         let usage = build_usage_update(&session, 200_000);
         let meta = usage.meta.as_ref().expect("meta should be present");
         assert!(meta.get(META_ACCUMULATED_TOTAL).is_none());
+    }
+
+    #[test]
+    fn test_classify_system_notification_recognizes_compaction() {
+        assert_eq!(
+            classify_system_notification("goose is compacting the conversation..."),
+            Some("compacting"),
+        );
+        assert_eq!(
+            classify_system_notification("Compaction complete"),
+            Some("compaction_complete"),
+        );
+    }
+
+    #[test]
+    fn test_classify_system_notification_unknown_returns_none() {
+        assert_eq!(classify_system_notification("hello world"), None);
+        assert_eq!(classify_system_notification(""), None);
     }
 
     #[test_case(
