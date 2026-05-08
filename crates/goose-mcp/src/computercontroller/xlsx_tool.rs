@@ -24,7 +24,7 @@ static WORKBOOK_CACHE: Lazy<Mutex<Option<CachedWorkbook>>> = Lazy::new(|| Mutex:
 static CACHE_PARSE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
-pub fn _test_reset_cache() {
+fn _test_reset_cache() {
     if let Ok(mut g) = WORKBOOK_CACHE.lock() {
         *g = None;
     }
@@ -32,7 +32,7 @@ pub fn _test_reset_cache() {
 }
 
 #[cfg(test)]
-pub fn _test_parse_count() -> usize {
+fn _test_parse_count() -> usize {
     CACHE_PARSE_COUNT.load(std::sync::atomic::Ordering::SeqCst)
 }
 

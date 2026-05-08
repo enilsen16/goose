@@ -1670,7 +1670,7 @@ impl GooseAcpAgent {
                 if let Err(e) = state.to_extension_data(&mut extension_data) {
                     warn!(error = %e, sid = %sid, "failed to serialize intended extension state");
                 } else if let Err(e) = session_manager
-                    .update(&internal_session_id)
+                    .update(&setup_session_id)
                     .extension_data(extension_data)
                     .apply()
                     .await
@@ -1784,7 +1784,7 @@ impl GooseAcpAgent {
             // reads of `extension_data` reflect what's really registered.
             // Runs unconditionally — partial failures still get their
             // successes recorded.
-            if let Err(e) = agent.persist_extension_state(&internal_session_id).await {
+            if let Err(e) = agent.persist_extension_state(&setup_session_id).await {
                 warn!(error = %e, sid = %sid, "failed to persist extension state after phase 2");
             }
 
@@ -3415,8 +3415,10 @@ impl GooseAcpAgent {
         };
 
         let mut response = PromptResponse::new(stop_reason);
-        if let Some(usage) = build_prompt_usage(&session) {
-            response = response.usage(usage);
+        if let Ok(session) = self.session_manager.get_session(&session_id, false).await {
+            if let Some(usage) = build_prompt_usage(&session) {
+                response = response.usage(usage);
+            }
         }
         Ok(response)
     }
