@@ -1120,7 +1120,7 @@ fn build_mode_state(
     for &name in GooseMode::VARIANTS {
         let goose_mode: GooseMode = name.parse().map_err(|_| {
             agent_client_protocol::Error::internal_error() // impossible but satisfy linters
-                .data(format!("Failed to parse GooseMode variant: {}", name))
+                .with_detail(format!("Failed to parse GooseMode variant: {}", name))
         })?;
         let mut mode = SessionMode::new(SessionModeId::new(name), name);
         mode.description = goose_mode.get_message().map(Into::into);
@@ -2840,7 +2840,7 @@ impl GooseAcpAgent {
         let mut sessions = self.sessions.lock().await;
         let session = sessions.get_mut(session_id).ok_or_else(|| {
             agent_client_protocol::Error::resource_not_found(Some(session_id.to_string()))
-                .data(format!("Session not found: {}", session_id))
+                .with_detail(format!("Session not found: {}", session_id))
         })?;
         if let Some(token) = cancel_token {
             session.cancel_token = Some(token);
@@ -2965,7 +2965,7 @@ impl GooseAcpAgent {
             .await
             .map_err(|_| {
                 agent_client_protocol::Error::resource_not_found(Some(session_id.clone()))
-                    .data(format!("Session not found: {}", session_id))
+                    .with_detail(format!("Session not found: {}", session_id))
             })?;
         debug!(target: "perf", sid = %sid, ms = t0.elapsed().as_millis() as u64, "perf: load_session get_session");
         let loaded_mode = goose_session.goose_mode;
@@ -3362,8 +3362,7 @@ impl GooseAcpAgent {
                         // still fires for the final state. Errors are logged
                         // but don't fail the prompt — a transient notification
                         // hiccup shouldn't tank a multi-minute agent run.
-                        if let Err(e) = self.send_usage_update(&args.session_id, &agent, cx).await
-                        {
+                        if let Err(e) = self.send_usage_update(&args.session_id, &agent, cx).await {
                             tracing::warn!(error = %e.message, "per-turn usage update failed");
                         }
                     }
@@ -3462,8 +3461,14 @@ impl GooseAcpAgent {
             .resolve_provider_for_model(&provider_name, model_id)
             .await?;
         if target_provider_name != provider_name {
-            self.update_provider(session_id, &target_provider_name, Some(model_id), None, None)
-                .await?;
+            self.update_provider(
+                session_id,
+                &target_provider_name,
+                Some(model_id),
+                None,
+                None,
+            )
+            .await?;
             return Ok(SetSessionModelResponse::new());
         }
         let extensions =
@@ -3531,7 +3536,6 @@ impl GooseAcpAgent {
         }
         Ok(current_provider.to_string())
     }
-
 
     async fn build_config_update(
         &self,
