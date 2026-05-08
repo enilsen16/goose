@@ -475,10 +475,14 @@ pub fn tool_ids_to_summarize(
 
         for content in &msg.content {
             if let MessageContent::ToolRequest(req) = content {
-                if let Ok(call) = &req.tool_call {
-                    if !is_summarizable_tool(&call.name) {
-                        continue;
-                    }
+                let Ok(call) = &req.tool_call else {
+                    // Malformed tool calls (parse errors) carry no name to check
+                    // and won't summarize cleanly — skip rather than waste a
+                    // model call on garbage input.
+                    continue;
+                };
+                if !is_summarizable_tool(&call.name) {
+                    continue;
                 }
                 tool_call_ids.push(req.id.clone());
             }
