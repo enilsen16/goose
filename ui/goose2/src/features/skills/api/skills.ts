@@ -151,14 +151,16 @@ export async function listSkills(
       ...(projectDir ? { projectDir } : {}),
     });
 
-  const [globalResponse, builtinResponse] = await Promise.all([
-    fetchSources(SKILL_SOURCE_TYPE),
-    fetchSources(BUILTIN_SKILL_SOURCE_TYPE).catch(() => null),
-  ]);
-  const projectResponses = await Promise.allSettled(
-    uniqueProjectDirs(projectDirs).map((projectDir) =>
-      fetchSources(SKILL_SOURCE_TYPE, projectDir),
-    ),
+  const [globalResponse, builtinResponse, projectResponses] = await Promise.all(
+    [
+      fetchSources(SKILL_SOURCE_TYPE),
+      fetchSources(BUILTIN_SKILL_SOURCE_TYPE).catch(() => null),
+      Promise.allSettled(
+        uniqueProjectDirs(projectDirs).map((projectDir) =>
+          fetchSources(SKILL_SOURCE_TYPE, projectDir),
+        ),
+      ),
+    ],
   );
   const responses = [
     { response: globalResponse, projectResponse: false },
