@@ -1207,7 +1207,29 @@ fn build_prompt_usage(session: &Session) -> Option<Usage> {
 
 fn build_usage_update(session: &Session, context_limit: usize) -> UsageUpdate {
     let used = session.total_tokens.unwrap_or(0).max(0) as u64;
-    UsageUpdate::new(used, context_limit as u64)
+    let mut update = UsageUpdate::new(used, context_limit as u64);
+    update.meta = Some(accumulated_meta(session));
+    update
+}
+
+/// `_meta` keys for accumulated session tokens. Mirrored on the goose2 side
+/// in `ui/goose2/src/shared/api/acpMetaKeys.ts` — keep in sync.
+const META_ACCUMULATED_TOTAL: &str = "goose.accumulatedTotal";
+const META_ACCUMULATED_INPUT: &str = "goose.accumulatedInput";
+const META_ACCUMULATED_OUTPUT: &str = "goose.accumulatedOutput";
+
+fn accumulated_meta(session: &Session) -> serde_json::Map<String, serde_json::Value> {
+    let mut meta = serde_json::Map::new();
+    if let Some(v) = to_nonnegative_u64(session.accumulated_total_tokens) {
+        meta.insert(META_ACCUMULATED_TOTAL.to_string(), v.into());
+    }
+    if let Some(v) = to_nonnegative_u64(session.accumulated_input_tokens) {
+        meta.insert(META_ACCUMULATED_INPUT.to_string(), v.into());
+    }
+    if let Some(v) = to_nonnegative_u64(session.accumulated_output_tokens) {
+        meta.insert(META_ACCUMULATED_OUTPUT.to_string(), v.into());
+    }
+    meta
 }
 
 fn validate_absolute_cwd(cwd: &Path) -> Result<(), agent_client_protocol::Error> {
@@ -2546,6 +2568,34 @@ fn extract_tool_raw_output(tool_result: &ToolResult<CallToolResult>) -> Option<s
 }
 
 impl GooseAcpAgent {
+    /// Fetches the session, builds a UsageUpdate (with accumulated tokens in
+    /// `_meta`), and sends it to the client. Returns the fetched session so
+    /// callers that also need it (e.g. for `build_prompt_usage`) avoid a
+    /// second round-trip to SQLite.
+    async fn send_usage_update(
+        &self,
+        session_id: &SessionId,
+        agent: &Arc<Agent>,
+        cx: &ConnectionTo<Client>,
+    ) -> Result<Session, agent_client_protocol::Error> {
+        let session = self
+            .session_manager
+            .get_session(&session_id.0, false)
+            .await
+            .internal_err_ctx("Failed to load session")?;
+        let provider = agent
+            .provider()
+            .await
+            .internal_err_ctx("Failed to get provider")?;
+        let usage_update =
+            build_usage_update(&session, provider.get_model_config().context_limit());
+        cx.send_notification(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::UsageUpdate(usage_update),
+        ))?;
+        Ok(session)
+    }
+
     async fn on_initialize(
         &self,
         args: InitializeRequest,
@@ -3210,6 +3260,8 @@ impl GooseAcpAgent {
                             .with_detail(format!("Session not found: {}", session_id))
                     })?;
 
+                    let is_assistant = message.role == Role::Assistant;
+
                     for content_item in &message.content {
                         match content_item {
                             MessageContent::ToolRequest(tr) => {
@@ -3249,6 +3301,19 @@ impl GooseAcpAgent {
                         )
                         .await?;
                     }
+                    drop(sessions);
+
+                    if is_assistant {
+                        // Live UsageUpdate so the UI tracks accumulated tokens
+                        // turn-by-turn. The terminal emit at end-of-prompt
+                        // still fires for the final state. Errors are logged
+                        // but don't fail the prompt — a transient notification
+                        // hiccup shouldn't tank a multi-minute agent run.
+                        if let Err(e) = self.send_usage_update(&args.session_id, &agent, cx).await
+                        {
+                            tracing::warn!(error = %e.message, "per-turn usage update failed");
+                        }
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -3270,21 +3335,7 @@ impl GooseAcpAgent {
             }
         }
 
-        let session = self
-            .session_manager
-            .get_session(&session_id, false)
-            .await
-            .internal_err_ctx("Failed to load session")?;
-        let provider = agent
-            .provider()
-            .await
-            .internal_err_ctx("Failed to get provider")?;
-        let usage_update =
-            build_usage_update(&session, provider.get_model_config().context_limit());
-        cx.send_notification(SessionNotification::new(
-            args.session_id.clone(),
-            SessionUpdate::UsageUpdate(usage_update),
-        ))?;
+        self.send_usage_update(&args.session_id, &agent, cx).await?;
 
         debug!(
             target: "perf",
@@ -4654,6 +4705,40 @@ print(\"hello, world\")
         let usage = build_usage_update(&session, 258_000);
         assert_eq!(usage.used, 0);
         assert_eq!(usage.size, 258_000);
+    }
+
+    #[test]
+    fn test_build_usage_update_includes_accumulated_in_meta() {
+        let session = make_session_with_usage(
+            Some(32_000),
+            Some(30_000),
+            Some(2_000),
+            Some(3_400_000),
+            Some(3_300_000),
+            Some(100_000),
+        );
+        let usage = build_usage_update(&session, 200_000);
+        let meta = usage.meta.as_ref().expect("meta should be present");
+        assert_eq!(
+            meta.get(META_ACCUMULATED_TOTAL).and_then(|v| v.as_u64()),
+            Some(3_400_000)
+        );
+        assert_eq!(
+            meta.get(META_ACCUMULATED_INPUT).and_then(|v| v.as_u64()),
+            Some(3_300_000)
+        );
+        assert_eq!(
+            meta.get(META_ACCUMULATED_OUTPUT).and_then(|v| v.as_u64()),
+            Some(100_000)
+        );
+    }
+
+    #[test]
+    fn test_build_usage_update_omits_missing_accumulated() {
+        let session = make_session_with_usage(Some(0), None, None, None, None, None);
+        let usage = build_usage_update(&session, 200_000);
+        let meta = usage.meta.as_ref().expect("meta should be present");
+        assert!(meta.get(META_ACCUMULATED_TOTAL).is_none());
     }
 
     #[test_case(
