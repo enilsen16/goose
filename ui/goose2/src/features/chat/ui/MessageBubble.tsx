@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, FileText, FolderClosed } from "lucide-react";
 import { IconRobot } from "@tabler/icons-react";
@@ -317,8 +317,13 @@ export const MessageBubble = memo(function MessageBubble({
   const { formatDate } = useLocaleFormatting();
   const { role, content: rawContent, created } = message;
   // Only user messages carry annotated blocks; skip the filter for others.
-  const content =
-    role === "user" ? filterUserVisibleContent(rawContent) : rawContent;
+  // Memoize: per-token streaming triggers re-renders, and these helpers
+  // iterate the entire content array.
+  const content = useMemo(
+    () => (role === "user" ? filterUserVisibleContent(rawContent) : rawContent),
+    [role, rawContent],
+  );
+  const sections = useMemo(() => groupContentSections(content), [content]);
   const { handleContentClick, pathNotice } = useArtifactLinkHandler();
   const persona = useAgentStore((state) =>
     message.metadata?.personaId
@@ -328,6 +333,15 @@ export const MessageBubble = memo(function MessageBubble({
   const { isCopied: isCopyConfirmed, copyToClipboard } = useCopyToClipboard();
   const personaAvatarUrl = useAvatarSrc(persona?.avatar);
   const catalogEntries = useProviderCatalogStore((state) => state.entries);
+  const assistantProviderId = message.metadata?.providerId;
+  const assistantProviderName = useMemo(
+    () =>
+      assistantProviderId
+        ? (getCatalogEntryFromEntries(catalogEntries, assistantProviderId)
+            ?.displayName ?? formatProviderLabel(assistantProviderId))
+        : undefined,
+    [assistantProviderId, catalogEntries],
+  );
 
   // Skip empty user bubbles (all blocks filtered as assistant-only).
   if (role === "user" && content.length === 0) return null;
@@ -354,11 +368,6 @@ export const MessageBubble = memo(function MessageBubble({
     );
   }
   const isUser = role === "user";
-  const assistantProviderId = message.metadata?.providerId;
-  const assistantProviderName = assistantProviderId
-    ? (getCatalogEntryFromEntries(catalogEntries, assistantProviderId)
-        ?.displayName ?? formatProviderLabel(assistantProviderId))
-    : undefined;
   const assistantDisplayName =
     message.metadata?.personaName ??
     persona?.displayName ??
@@ -457,7 +466,7 @@ export const MessageBubble = memo(function MessageBubble({
               ))}
             </div>
           )}
-          {groupContentSections(content).map((section, sectionIdx) => {
+          {sections.map((section, sectionIdx) => {
             if (section.type === "toolChain") {
               const toolItems = section.items as ToolChainItem[];
               return <ToolChainCards key={section.key} toolItems={toolItems} />;
