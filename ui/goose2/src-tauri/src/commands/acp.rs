@@ -1,7 +1,8 @@
 use std::env;
 
-use crate::services::acp::GooseServeProcess;
+use crate::services::acp::GooseServeHandle;
 use serde::Serialize;
+use tauri::Manager;
 
 const GOOSE_SERVE_URL_ENV: &str = "GOOSE_SERVE_URL";
 const GOOSE_SERVER_SECRET_KEY_ENV: &str = "GOOSE_SERVER__SECRET_KEY";
@@ -18,7 +19,8 @@ pub async fn get_goose_serve_url(app_handle: tauri::AppHandle) -> Result<String,
     if let Some(url) = configured_goose_serve_url() {
         return Ok(url);
     }
-    let process = GooseServeProcess::get(app_handle).await?;
+    let handle = app_handle.state::<GooseServeHandle>();
+    let process = handle.get(app_handle.clone()).await?;
     Ok(process.ws_url())
 }
 
@@ -34,7 +36,8 @@ pub async fn get_goose_serve_host_info(
         });
     }
 
-    let process = GooseServeProcess::get(app_handle).await?;
+    let handle = app_handle.state::<GooseServeHandle>();
+    let process = handle.get(app_handle.clone()).await?;
     Ok(GooseServeHostInfo {
         http_base_url: process.http_base_url(),
         secret_key: process.secret_key().to_string(),

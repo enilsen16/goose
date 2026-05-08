@@ -1658,6 +1658,7 @@ dependencies = [
  "doctor",
  "ignore",
  "keyring",
+ "libc",
  "log",
  "mime_guess",
  "serde",

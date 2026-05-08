@@ -2,6 +2,7 @@ mod commands;
 mod services;
 mod types;
 
+use services::acp::GooseServeHandle;
 use services::distro_bundle::DistroBundleState;
 use tauri::Manager;
 use tauri_plugin_window_state::StateFlags;
@@ -24,7 +25,8 @@ pub fn run() {
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
                 .build(),
-        );
+        )
+        .manage(GooseServeHandle::new());
 
     #[cfg(feature = "app-test-driver")]
     let builder = builder.plugin(tauri_plugin_app_test_driver::init());
@@ -68,5 +70,9 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, _event| {});
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                app.state::<GooseServeHandle>().shutdown();
+            }
+        });
 }
