@@ -332,15 +332,22 @@ export const MessageBubble = memo(function MessageBubble({
   );
   const { isCopied: isCopyConfirmed, copyToClipboard } = useCopyToClipboard();
   const personaAvatarUrl = useAvatarSrc(persona?.avatar);
-  const catalogEntries = useProviderCatalogStore((state) => state.entries);
   const assistantProviderId = message.metadata?.providerId;
+  // Subscribe to the single matching entry, not the whole catalog: any
+  // unrelated provider mutation rebuilds the entries array and would bust
+  // every bubble's memo.
+  const assistantCatalogEntry = useProviderCatalogStore((state) =>
+    assistantProviderId
+      ? getCatalogEntryFromEntries(state.entries, assistantProviderId)
+      : undefined,
+  );
   const assistantProviderName = useMemo(
     () =>
       assistantProviderId
-        ? (getCatalogEntryFromEntries(catalogEntries, assistantProviderId)
-            ?.displayName ?? formatProviderLabel(assistantProviderId))
+        ? (assistantCatalogEntry?.displayName ??
+          formatProviderLabel(assistantProviderId))
         : undefined,
-    [assistantProviderId, catalogEntries],
+    [assistantProviderId, assistantCatalogEntry],
   );
 
   // Skip empty user bubbles (all blocks filtered as assistant-only).
