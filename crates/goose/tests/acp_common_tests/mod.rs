@@ -14,6 +14,7 @@ use fixtures::{
 };
 use fs_err as fs;
 use goose::acp::server::AcpProviderFactory;
+use goose::acp::AcpErrorExt;
 use goose::config::base::CONFIG_YAML_NAME;
 use goose::config::GooseMode;
 use goose::conversation::message::Message;
@@ -707,7 +708,7 @@ pub async fn run_load_session_error<C: Connection>() {
         agent_client_protocol::Error::resource_not_found(Some(
             "nonexistent-session-id".to_string()
         ))
-        .data("Session not found: nonexistent-session-id")
+        .with_detail("Session not found: nonexistent-session-id")
     );
 }
 
@@ -741,9 +742,9 @@ pub async fn run_config_option_set_error<C: Connection>(
 #[macro_export]
 macro_rules! tests_config_option_set_error {
     ($conn:ty) => {
-        #[test_case::test_case("mode", "not_a_mode", None, agent_client_protocol::Error::invalid_params().data("Invalid mode: not_a_mode") ; "invalid mode via config option")]
-        #[test_case::test_case("mode", "auto", Some("nonexistent-session-id"), agent_client_protocol::Error::resource_not_found(Some("nonexistent-session-id".to_string())).data("Session not found: nonexistent-session-id") ; "session not found via config option")]
-        #[test_case::test_case("thought_level", "high", None, agent_client_protocol::Error::invalid_params().data("Unsupported config option: thought_level") ; "unsupported config option")]
+        #[test_case::test_case("mode", "not_a_mode", None, agent_client_protocol::Error::invalid_params().with_detail("Invalid mode: not_a_mode") ; "invalid mode via config option")]
+        #[test_case::test_case("mode", "auto", Some("nonexistent-session-id"), agent_client_protocol::Error::resource_not_found(Some("nonexistent-session-id".to_string())).with_detail("Session not found: nonexistent-session-id") ; "session not found via config option")]
+        #[test_case::test_case("thought_level", "high", None, agent_client_protocol::Error::invalid_params().with_detail("Unsupported config option: thought_level") ; "unsupported config option")]
         fn test_config_option_set_error(
             config_id: &'static str,
             value: &'static str,
@@ -892,8 +893,8 @@ pub async fn run_mode_set_error<C: Connection>(
 #[macro_export]
 macro_rules! tests_mode_set_error {
     ($conn:ty) => {
-        #[test_case::test_case("not_a_mode", None, agent_client_protocol::Error::invalid_params().data("Invalid mode: not_a_mode") ; "invalid mode")]
-        #[test_case::test_case("auto", Some("nonexistent-session-id"), agent_client_protocol::Error::resource_not_found(Some("nonexistent-session-id".to_string())).data("Session not found: nonexistent-session-id") ; "session not found")]
+        #[test_case::test_case("not_a_mode", None, agent_client_protocol::Error::invalid_params().with_detail("Invalid mode: not_a_mode") ; "invalid mode")]
+        #[test_case::test_case("auto", Some("nonexistent-session-id"), agent_client_protocol::Error::resource_not_found(Some("nonexistent-session-id".to_string())).with_detail("Session not found: nonexistent-session-id") ; "session not found")]
         fn test_mode_set_error(
             mode_id: &'static str,
             session_id: Option<&'static str>,
@@ -1050,7 +1051,7 @@ pub async fn run_model_set_error_session_not_found<C: Connection>() {
         agent_client_protocol::Error::resource_not_found(Some(
             "nonexistent-session-id".to_string()
         ))
-        .data("Session not found: nonexistent-session-id")
+        .with_detail("Session not found: nonexistent-session-id")
     );
 }
 

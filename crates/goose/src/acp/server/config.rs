@@ -22,7 +22,7 @@ impl GooseAcpAgent {
                 Err(e) => {
                     return Err(
                         agent_client_protocol::Error::internal_error().with_detail(e.to_string())
-                    )
+                    );
                 }
             };
             values.push(PreferenceValue { key, value });

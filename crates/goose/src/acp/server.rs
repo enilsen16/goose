@@ -1,7 +1,7 @@
+use crate::acp::PermissionDecision;
 use crate::acp::custom_requests::*;
 use crate::acp::fs::AcpTools;
 use crate::acp::tools::AcpAwareToolMeta;
-use crate::acp::PermissionDecision;
 use crate::agents::extension::{Envs, PLATFORM_EXTENSIONS};
 use crate::agents::extension_manager::TRUSTED_TOOL_UPDATE_META_KEY;
 use crate::agents::mcp_client::{GooseMcpHostInfo, McpClientTrait};
@@ -55,9 +55,9 @@ use agent_client_protocol::{
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use fs_err as fs;
+use futures::FutureExt;
 use futures::future::{BoxFuture, Either};
 use futures::stream::{self, StreamExt};
-use futures::FutureExt;
 use rmcp::model::{
     AnnotateAble, CallToolResult, RawContent, RawTextContent, ResourceContents, Role,
 };
@@ -101,55 +101,7 @@ const SESSION_LIST_PAGE_SIZE: usize = 50;
 const ACP_SESSION_LIST_TYPES: [SessionType; 3] =
     [SessionType::User, SessionType::Scheduled, SessionType::Acp];
 
-/// Convenience conversions from any `Display` error into an `agent_client_protocol::Error`.
-///
-/// Replaces the repetitive `.internal_err()`
-/// pattern. Use `.internal_err()?` for server-side failures and `.invalid_params_err()?`
-/// for bad client input. For custom messages use `.internal_err_ctx("context")?`.
-#[allow(dead_code)]
-trait ResultExt<T> {
-    fn internal_err(self) -> Result<T, agent_client_protocol::Error>;
-    fn invalid_params_err(self) -> Result<T, agent_client_protocol::Error>;
-    fn internal_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error>;
-    fn invalid_params_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error>;
-}
-
-/// Extension to set both `message` and `data` on an ACP `Error` from a single
-/// detail string. Goose2's getErrorMessage() reads error.message, and the
-/// upstream constructors (internal_error, invalid_params, etc.) leave it as
-/// the JSON-RPC default ("Internal error", "Invalid params"), so any error
-/// detail attached only to `data` is invisible in the UI.
-pub(super) trait AcpErrorExt {
-    fn with_detail(self, detail: impl Into<String>) -> Self;
-}
-
-impl AcpErrorExt for agent_client_protocol::Error {
-    fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        let s = detail.into();
-        self.message = s.clone();
-        self.data = Some(serde_json::Value::String(s));
-        self
-    }
-}
-
-impl<T, E: std::fmt::Display> ResultExt<T> for Result<T, E> {
-    fn internal_err(self) -> Result<T, agent_client_protocol::Error> {
-        self.map_err(|e| agent_client_protocol::Error::internal_error().with_detail(e.to_string()))
-    }
-    fn invalid_params_err(self) -> Result<T, agent_client_protocol::Error> {
-        self.map_err(|e| agent_client_protocol::Error::invalid_params().with_detail(e.to_string()))
-    }
-    fn internal_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error> {
-        self.map_err(|e| {
-            agent_client_protocol::Error::internal_error().with_detail(format!("{context}: {e}"))
-        })
-    }
-    fn invalid_params_err_ctx(self, context: &str) -> Result<T, agent_client_protocol::Error> {
-        self.map_err(|e| {
-            agent_client_protocol::Error::invalid_params().with_detail(format!("{context}: {e}"))
-        })
-    }
-}
+use crate::acp::{AcpErrorExt, ResultExt};
 
 const DEFAULT_PROVIDER_ID: &str = "goose";
 const DEFAULT_PROVIDER_LABEL: &str = "Goose (Default)";
@@ -1224,6 +1176,11 @@ const META_ACCUMULATED_OUTPUT: &str = "goose.accumulatedOutput";
 /// (e.g. "goose is compacting the conversation..."). Mirrored on the frontend.
 const META_SYSTEM_NOTIFICATION: &str = "goose.systemNotification";
 
+/// `_meta` key on `SetSessionModelResponse._meta` carrying the provider id the
+/// model was resolved to. Set when `set_session_model` switches providers under
+/// the hood so the caller can reconcile its local state without a round-trip.
+const META_RESOLVED_PROVIDER_ID: &str = "goose.resolvedProviderId";
+
 /// Map an agent system-notification message to a stable `event` string the UI
 /// can switch on. The original notification messages are defined in
 /// `crates/goose/src/agents/agent.rs` (e.g. `COMPACTION_THINKING_TEXT`); we
@@ -2049,8 +2006,7 @@ impl GooseAcpAgent {
                             return;
                         }
 
-                        let system =
-                            "Summarize this tool call in a short lowercase phrase (3-8 words). \
+                        let system = "Summarize this tool call in a short lowercase phrase (3-8 words). \
                              No punctuation. No quotes. Examples: reading project configuration, \
                              checking network connectivity, listing files in src directory";
                         let user_text = format!("Tool: {name}\nArguments: {args_json}");
@@ -3261,6 +3217,10 @@ impl GooseAcpAgent {
         let mut was_cancelled = false;
         let mut first_event_logged = false;
         let mut event_count: u32 = 0;
+        // Latest `Session` returned by `send_usage_update`; reused to build
+        // the final `PromptResponse.usage` so we don't re-read SQLite at the
+        // tail of the prompt.
+        let mut latest_session: Option<crate::session::session_manager::Session> = None;
         // Tracks whether the prompt cycle produced any visible/actionable
         // assistant output. Streaming reasoning models often yield several
         // intermediate `AgentEvent::Message`s that are thinking-only — only
@@ -3356,14 +3316,21 @@ impl GooseAcpAgent {
                     }
                     drop(sessions);
 
+                    // Per-assistant-message UsageUpdate so the goose2 token
+                    // counter ticks during multi-tool-chain runs (a 10-step
+                    // agentic run otherwise looks frozen between turns).
+                    // Captured into `latest_session` so the final
+                    // PromptResponse can reuse the most recent value instead
+                    // of re-reading SQLite. Errors are warned-and-continued —
+                    // a transient notification hiccup shouldn't tank a
+                    // multi-minute agent run.
                     if is_assistant {
-                        // Live UsageUpdate so the UI tracks accumulated tokens
-                        // turn-by-turn. The terminal emit at end-of-prompt
-                        // still fires for the final state. Errors are logged
-                        // but don't fail the prompt — a transient notification
-                        // hiccup shouldn't tank a multi-minute agent run.
-                        if let Err(e) = self.send_usage_update(&args.session_id, &agent, cx).await {
-                            tracing::warn!(error = %e.message, "per-turn usage update failed");
+                        match self.send_usage_update(&args.session_id, &agent, cx).await {
+                            Ok(session) => latest_session = Some(session),
+                            Err(e) => tracing::warn!(
+                                error = %e.message,
+                                "per-turn usage update failed"
+                            ),
                         }
                     }
                 }
@@ -3397,7 +3364,17 @@ impl GooseAcpAgent {
             ));
         }
 
-        self.send_usage_update(&args.session_id, &agent, cx).await?;
+        // Final UsageUpdate captures the post-prompt state; reused for the
+        // PromptResponse below so we don't re-read SQLite. Warn-and-continue
+        // matches the per-turn calls — a notification hiccup shouldn't fail
+        // a completed prompt.
+        let final_session = match self.send_usage_update(&args.session_id, &agent, cx).await {
+            Ok(session) => Some(session),
+            Err(e) => {
+                tracing::warn!(error = %e.message, "final usage update failed");
+                None
+            }
+        };
 
         debug!(
             target: "perf",
@@ -3414,7 +3391,7 @@ impl GooseAcpAgent {
         };
 
         let mut response = PromptResponse::new(stop_reason);
-        if let Ok(session) = self.session_manager.get_session(&session_id, false).await {
+        if let Some(session) = final_session.or(latest_session) {
             if let Some(usage) = build_prompt_usage(&session) {
                 response = response.usage(usage);
             }
@@ -3469,7 +3446,12 @@ impl GooseAcpAgent {
                 None,
             )
             .await?;
-            return Ok(SetSessionModelResponse::new());
+            let mut meta = serde_json::Map::new();
+            meta.insert(
+                META_RESOLVED_PROVIDER_ID.to_string(),
+                serde_json::Value::String(target_provider_name),
+            );
+            return Ok(SetSessionModelResponse::new().meta(meta));
         }
         let extensions =
             EnabledExtensionsState::for_session(&self.session_manager, session_id, &config).await;

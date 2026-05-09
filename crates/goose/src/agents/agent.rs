@@ -4,9 +4,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use futures::stream::BoxStream;
-use futures::{stream, FutureExt, Stream, StreamExt, TryStreamExt};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, stream};
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
@@ -15,33 +15,34 @@ use super::final_output_tool::FinalOutputTool;
 use super::mcp_client::GooseMcpHostInfo;
 use super::platform_tools;
 use super::tool_confirmation_router::ToolConfirmationRouter;
-use super::tool_execution::{ToolCallResult, CHAT_MODE_TOOL_SKIPPED_RESPONSE, DECLINED_RESPONSE};
+use super::tool_execution::{CHAT_MODE_TOOL_SKIPPED_RESPONSE, DECLINED_RESPONSE, ToolCallResult};
 use crate::action_required_manager::ActionRequiredManager;
 use crate::agents::extension::{ExtensionConfig, ExtensionResult, ToolInfo};
 use crate::agents::extension_manager::{
-    get_parameter_names, ExtensionManager, ExtensionManagerCapabilities,
+    ExtensionManager, ExtensionManagerCapabilities, get_parameter_names,
 };
 use crate::agents::final_output_tool::{FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME};
 use crate::agents::platform_extensions::MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE;
+use crate::agents::platform_extensions::summon::discover_filesystem_sources;
 use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::prompt_manager::PromptManager;
 use crate::agents::retry::{RetryManager, RetryResult};
 use crate::agents::types::{FrontendTool, SessionConfig, SharedProvider, ToolResultReceiver};
 use crate::config::extensions::name_to_key;
 use crate::config::permission::PermissionManager;
-use crate::config::{get_enabled_extensions, Config, GooseMode};
+use crate::config::{Config, GooseMode, get_enabled_extensions};
 use crate::context_mgmt::{
-    check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
+    DEFAULT_COMPACTION_THRESHOLD, check_if_compaction_needed, compact_messages,
 };
 use crate::conversation::message::{
     ActionRequiredData, InferenceMetadata, Message, MessageContent, ProviderMetadata,
     SystemNotificationType, ToolRequest,
 };
-use crate::conversation::{debug_conversation_fix, fix_conversation, Conversation};
+use crate::conversation::{Conversation, debug_conversation_fix, fix_conversation};
 use crate::mcp_utils::ToolResult;
+use crate::permission::PermissionConfirmation;
 use crate::permission::permission_inspector::PermissionInspector;
 use crate::permission::permission_judge::PermissionCheckResult;
-use crate::permission::PermissionConfirmation;
 use crate::providers::base::{PermissionRouting, Provider};
 use crate::providers::errors::ProviderError;
 use crate::recipe::{Author, Recipe, Response, Settings};
@@ -52,7 +53,7 @@ use crate::security::security_inspector::SecurityInspector;
 use crate::session::extension_data::{EnabledExtensionsState, ExtensionState};
 use crate::session::{Session, SessionManager, SessionNameUpdate};
 use crate::tool_inspection::ToolInspectionManager;
-use crate::tool_monitor::{RepetitionInspector, FINDING_ID_REPEATED_ERROR};
+use crate::tool_monitor::{FINDING_ID_REPEATED_ERROR, RepetitionInspector};
 use crate::utils::is_token_cancelled;
 use regex::Regex;
 use rmcp::model::{
@@ -60,7 +61,7 @@ use rmcp::model::{
     ServerNotification, Tool,
 };
 use serde_json::Value;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -237,6 +238,50 @@ pub enum ToolStreamItem<T> {
 
 pub type ToolStream =
     Pin<Box<dyn Stream<Item = ToolStreamItem<ToolResult<CallToolResult>>> + Send>>;
+
+// Hard byte cap on the joined-text fingerprint so chatty tools don't allocate
+// megabytes only to be truncated to ~100 chars by RepetitionInspector.
+const TOOL_ERROR_FINGERPRINT_BUDGET: usize = 200;
+
+/// Build a short fingerprint from an `is_error` `CallToolResult` for the
+/// repetition inspector. Joins text content up to the byte budget without
+/// ever copying past it; falls back to `structured_content` JSON; never
+/// serializes the full `Vec<Content>`.
+fn build_tool_error_fingerprint(r: &CallToolResult) -> String {
+    let mut text = String::with_capacity(TOOL_ERROR_FINGERPRINT_BUDGET);
+    for c in &r.content {
+        let Some(t) = c.as_text() else { continue };
+        let remaining = TOOL_ERROR_FINGERPRINT_BUDGET.saturating_sub(text.len());
+        if remaining == 0 {
+            break;
+        }
+        if !text.is_empty() && remaining >= 1 {
+            text.push(' ');
+        }
+        let take = char_floor(&t.text, TOOL_ERROR_FINGERPRINT_BUDGET - text.len());
+        if let Some(slice) = t.text.get(..take) {
+            text.push_str(slice);
+        }
+    }
+    if !text.is_empty() {
+        return text;
+    }
+    if let Some(structured) = &r.structured_content {
+        if let Ok(s) = serde_json::to_string(structured) {
+            return s;
+        }
+    }
+    "tool error".to_string()
+}
+
+/// Largest byte index `<= max_bytes` that is also a UTF-8 char boundary.
+fn char_floor(s: &str, max_bytes: usize) -> usize {
+    let mut end = max_bytes.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
 
 // tool_stream combines a stream of ServerNotifications with a future representing the
 // final result of the tool call. MCP notifications are not request-scoped, but
@@ -1922,19 +1967,7 @@ impl Agent {
                                                                         self.tool_inspection_manager.record_tool_error(tool_name, &e.to_string());
                                                                     }
                                                                     Ok(r) if r.is_error == Some(true) => {
-                                                                        let text = r.content.iter()
-                                                                            .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
-                                                                            .collect::<Vec<_>>()
-                                                                            .join(" ");
-                                                                        let error_text = if !text.is_empty() {
-                                                                            text
-                                                                        } else if let Some(structured) = &r.structured_content {
-                                                                            serde_json::to_string(structured)
-                                                                                .unwrap_or_else(|_| "error".to_string())
-                                                                        } else {
-                                                                            serde_json::to_string(&r.content)
-                                                                                .unwrap_or_else(|_| "error".to_string())
-                                                                        };
+                                                                        let error_text = build_tool_error_fingerprint(r);
                                                                         self.tool_inspection_manager.record_tool_error(tool_name, &error_text);
                                                                     }
                                                                     Ok(_) => {
@@ -3041,5 +3074,61 @@ mod tests {
         assert!(extract_string_arg(&input, &["path"]).is_none());
         let input = serde_json::json!({ "path": "" });
         assert!(extract_string_arg(&input, &["path"]).is_none());
+    }
+
+    #[test]
+    fn test_tool_error_fingerprint_joins_text_under_budget() {
+        let result = CallToolResult::error(vec![
+            Content::text("first chunk".to_string()),
+            Content::text("second chunk".to_string()),
+        ]);
+        assert_eq!(
+            build_tool_error_fingerprint(&result),
+            "first chunk second chunk"
+        );
+    }
+
+    #[test]
+    fn test_tool_error_fingerprint_breaks_early_at_budget() {
+        let chunks: Vec<Content> = (0..20)
+            .map(|i| Content::text(format!("chunk{i}-{}", "x".repeat(50))))
+            .collect();
+        let total_input_len: usize = chunks
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.len()))
+            .sum::<usize>()
+            + 19; // separators
+        let result = CallToolResult::error(chunks);
+        let fp = build_tool_error_fingerprint(&result);
+        assert!(
+            fp.len() < total_input_len / 2,
+            "fingerprint should break early instead of joining all chunks (len={})",
+            fp.len()
+        );
+    }
+
+    #[test]
+    fn test_tool_error_fingerprint_caps_single_huge_chunk() {
+        let huge = "x".repeat(10_000);
+        let result = CallToolResult::error(vec![Content::text(huge)]);
+        let fp = build_tool_error_fingerprint(&result);
+        assert!(
+            fp.len() <= TOOL_ERROR_FINGERPRINT_BUDGET,
+            "fingerprint must never exceed the budget (len={})",
+            fp.len()
+        );
+    }
+
+    #[test]
+    fn test_tool_error_fingerprint_falls_back_to_structured_then_literal() {
+        let mut empty_result = CallToolResult::error(Vec::new());
+        empty_result.structured_content = Some(serde_json::json!({"code": 42}));
+        assert_eq!(
+            build_tool_error_fingerprint(&empty_result),
+            r#"{"code":42}"#
+        );
+
+        let bare = CallToolResult::error(Vec::new());
+        assert_eq!(build_tool_error_fingerprint(&bare), "tool error");
     }
 }

@@ -1,3 +1,4 @@
+use crate::acp::AcpErrorExt;
 use agent_client_protocol::schema::{
     ClientCapabilities, CloseSessionRequest, ContentBlock, ContentChunk, EnvVariable, HttpHeader,
     ImageContent, InitializeRequest, InitializeResponse, McpCapabilities, McpServer, McpServerHttp,
@@ -999,7 +1000,7 @@ async fn handle_requests(
             if let Some(tx) = init_tx.take() {
                 let _ = tx.send(Err(anyhow::anyhow!(message.clone())));
             }
-            agent_client_protocol::Error::internal_error().data(message)
+            agent_client_protocol::Error::internal_error().with_detail(message)
         })?;
 
     let supports_close = init_response

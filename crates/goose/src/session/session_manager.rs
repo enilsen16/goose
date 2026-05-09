@@ -1,9 +1,9 @@
-use crate::config::GooseMode;
 use crate::config::paths::Paths;
-use crate::conversation::Conversation;
+use crate::config::GooseMode;
 use crate::conversation::message::Message;
+use crate::conversation::Conversation;
 use crate::model::ModelConfig;
-use crate::providers::base::{MSG_COUNT_FOR_SESSION_NAME_GENERATION, Provider};
+use crate::providers::base::{Provider, MSG_COUNT_FOR_SESSION_NAME_GENERATION};
 use crate::recipe::Recipe;
 use crate::session::extension_data::ExtensionData;
 use anyhow::Result;

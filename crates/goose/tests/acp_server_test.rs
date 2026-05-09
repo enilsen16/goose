@@ -3,6 +3,8 @@
 mod common_tests;
 use agent_client_protocol::schema::{ListSessionsRequest, ListSessionsResponse};
 use agent_client_protocol::ErrorCode;
+#[allow(unused_imports)] // brought in for macro expansions of error-set tests
+use goose::acp::AcpErrorExt;
 use common_tests::fixtures::server::AcpServerConnection;
 use common_tests::fixtures::{run_test, Connection, OpenAiFixture, TestConnectionConfig};
 #[cfg(feature = "code-mode")]
