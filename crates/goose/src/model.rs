@@ -140,7 +140,18 @@ impl<'de> Deserialize<'de> for ModelConfig {
 
 impl ModelConfig {
     pub fn new(model_name: &str) -> Result<Self, ConfigError> {
-        Self::new_base(model_name.to_string(), None)
+        Self::new_base(model_name.to_string(), None, crate::config::Config::global())
+    }
+
+    /// Like [`ModelConfig::new`] but reads `GOOSE_CONTEXT_LIMIT` and
+    /// `GOOSE_MAX_TOKENS` from the supplied `Config` instead of the
+    /// process-wide singleton. Lets tests stub the underlying config file
+    /// without process-wide leakage from `~/.config/goose/config.yaml`.
+    pub fn new_with_config(
+        model_name: &str,
+        config: &crate::config::Config,
+    ) -> Result<Self, ConfigError> {
+        Self::new_base(model_name.to_string(), None, config)
     }
 
     pub fn new_with_context_env(
@@ -148,14 +159,18 @@ impl ModelConfig {
         provider_name: &str,
         context_env_var: Option<&str>,
     ) -> Result<Self, ConfigError> {
-        let config = Self::new_base(model_name, context_env_var)?;
+        let config = Self::new_base(model_name, context_env_var, crate::config::Config::global())?;
         Ok(config.with_canonical_limits(provider_name))
     }
 
-    fn new_base(model_name: String, context_env_var: Option<&str>) -> Result<Self, ConfigError> {
+    fn new_base(
+        model_name: String,
+        context_env_var: Option<&str>,
+        config: &crate::config::Config,
+    ) -> Result<Self, ConfigError> {
         // Check a provider-specific env var first (e.g. DATABRICKS_CONTEXT_LIMIT),
-        // then fall back to GOOSE_CONTEXT_LIMIT.  Using Config::global().get_param()
-        // reads from both environment variables and config.yaml, so users can set
+        // then fall back to GOOSE_CONTEXT_LIMIT.  config.get_param() reads from
+        // both environment variables and config.yaml, so users can set
         // `GOOSE_CONTEXT_LIMIT: 1000000` in config.yaml instead of exporting an
         // env var.  See #7839.
         let context_limit = if let Some(env_var) = context_env_var {
@@ -165,7 +180,7 @@ impl ModelConfig {
                 None
             }
         } else {
-            match crate::config::Config::global().get_param::<usize>("GOOSE_CONTEXT_LIMIT") {
+            match config.get_param::<usize>("GOOSE_CONTEXT_LIMIT") {
                 Ok(limit) => {
                     if limit == 0 {
                         return Err(ConfigError::InvalidRange(
@@ -186,7 +201,7 @@ impl ModelConfig {
             }
         };
 
-        let max_tokens = Self::parse_max_tokens()?;
+        let max_tokens = Self::parse_max_tokens(config)?;
         let temperature = Self::parse_temperature()?;
         let toolshim = Self::parse_toolshim()?;
         let toolshim_model = Self::parse_toolshim_model()?;
@@ -292,8 +307,8 @@ impl ModelConfig {
         }
     }
 
-    fn parse_max_tokens() -> Result<Option<i32>, ConfigError> {
-        match crate::config::Config::global().get_param::<i32>("GOOSE_MAX_TOKENS") {
+    fn parse_max_tokens(config: &crate::config::Config) -> Result<Option<i32>, ConfigError> {
+        match config.get_param::<i32>("GOOSE_MAX_TOKENS") {
             Ok(tokens) => {
                 if tokens <= 0 {
                     return Err(ConfigError::InvalidRange(
@@ -531,30 +546,52 @@ impl ModelConfig {
         ModelConfig::new(model_name)
             .unwrap_or_else(|_| panic!("Failed to create model config for {}", model_name))
     }
+
+    /// Tests should prefer this over [`Self::new_or_fail`] when they need
+    /// hermetic config: it reads from `config` instead of `Config::global()`,
+    /// so a stray `GOOSE_MAX_TOKENS: …` in the developer's local
+    /// `~/.config/goose/config.yaml` doesn't leak into the test.
+    pub fn new_or_fail_with_config(
+        model_name: &str,
+        config: &crate::config::Config,
+    ) -> ModelConfig {
+        ModelConfig::new_with_config(model_name, config)
+            .unwrap_or_else(|_| panic!("Failed to create model config for {}", model_name))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+
+    /// Hermetic Config pointed at empty temp files. Use this instead of
+    /// `Config::global()` so a stray `GOOSE_MAX_TOKENS: …` in the developer's
+    /// `~/.config/goose/config.yaml` doesn't bleed into the test.
+    fn hermetic_config() -> crate::config::Config {
+        let cfg = NamedTempFile::new().unwrap();
+        let secrets = NamedTempFile::new().unwrap();
+        crate::config::Config::new_with_file_secrets(cfg.path(), secrets.path()).unwrap()
+    }
 
     #[test]
     fn test_parse_max_tokens_valid() {
         let _guard = env_lock::lock_env([("GOOSE_MAX_TOKENS", Some("4096"))]);
-        let result = ModelConfig::parse_max_tokens().unwrap();
+        let result = ModelConfig::parse_max_tokens(&hermetic_config()).unwrap();
         assert_eq!(result, Some(4096));
     }
 
     #[test]
     fn test_parse_max_tokens_not_set() {
         let _guard = env_lock::lock_env([("GOOSE_MAX_TOKENS", None::<&str>)]);
-        let result = ModelConfig::parse_max_tokens().unwrap();
+        let result = ModelConfig::parse_max_tokens(&hermetic_config()).unwrap();
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_parse_max_tokens_invalid_string() {
         let _guard = env_lock::lock_env([("GOOSE_MAX_TOKENS", Some("not_a_number"))]);
-        let result = ModelConfig::parse_max_tokens();
+        let result = ModelConfig::parse_max_tokens(&hermetic_config());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::InvalidValue(..)));
     }
@@ -562,7 +599,7 @@ mod tests {
     #[test]
     fn test_parse_max_tokens_zero() {
         let _guard = env_lock::lock_env([("GOOSE_MAX_TOKENS", Some("0"))]);
-        let result = ModelConfig::parse_max_tokens();
+        let result = ModelConfig::parse_max_tokens(&hermetic_config());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::InvalidRange(..)));
     }
@@ -570,7 +607,7 @@ mod tests {
     #[test]
     fn test_parse_max_tokens_negative() {
         let _guard = env_lock::lock_env([("GOOSE_MAX_TOKENS", Some("-100"))]);
-        let result = ModelConfig::parse_max_tokens();
+        let result = ModelConfig::parse_max_tokens(&hermetic_config());
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ConfigError::InvalidRange(..)));
     }
@@ -584,7 +621,7 @@ mod tests {
             ("GOOSE_TOOLSHIM", None::<&str>),
             ("GOOSE_TOOLSHIM_OLLAMA_MODEL", None::<&str>),
         ]);
-        let config = ModelConfig::new("test-model").unwrap();
+        let config = ModelConfig::new_with_config("test-model", &hermetic_config()).unwrap();
         assert_eq!(config.max_tokens, Some(8192));
     }
 
@@ -597,7 +634,7 @@ mod tests {
             ("GOOSE_TOOLSHIM", None::<&str>),
             ("GOOSE_TOOLSHIM_OLLAMA_MODEL", None::<&str>),
         ]);
-        let config = ModelConfig::new("test-model").unwrap();
+        let config = ModelConfig::new_with_config("test-model", &hermetic_config()).unwrap();
         assert_eq!(config.max_tokens, None);
     }
 
@@ -875,7 +912,8 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let config = ModelConfig::new_or_fail("gpt-4o").with_canonical_limits("openai");
+            let config = ModelConfig::new_or_fail_with_config("gpt-4o", &hermetic_config())
+                .with_canonical_limits("openai");
 
             assert_eq!(config.context_limit, Some(128_000));
             assert_eq!(config.max_tokens, Some(16_384));
@@ -888,7 +926,7 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let mut config = ModelConfig::new_or_fail("gpt-4o");
+            let mut config = ModelConfig::new_or_fail_with_config("gpt-4o", &hermetic_config());
             config.context_limit = Some(64_000);
             let config = config.with_canonical_limits("openai");
 
@@ -901,7 +939,7 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let mut config = ModelConfig::new_or_fail("gpt-4o");
+            let mut config = ModelConfig::new_or_fail_with_config("gpt-4o", &hermetic_config());
             config.max_tokens = Some(1_000);
             let config = config.with_canonical_limits("openai");
 
@@ -914,8 +952,11 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let config =
-                ModelConfig::new_or_fail("moonshotai/kimi-k2.6").with_canonical_limits("nvidia");
+            let config = ModelConfig::new_or_fail_with_config(
+                "moonshotai/kimi-k2.6",
+                &hermetic_config(),
+            )
+            .with_canonical_limits("nvidia");
 
             assert_eq!(config.context_limit, Some(262_144));
             assert_eq!(config.max_tokens, None);
@@ -928,8 +969,11 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let config =
-                ModelConfig::new_or_fail("totally-unknown-model").with_canonical_limits("openai");
+            let config = ModelConfig::new_or_fail_with_config(
+                "totally-unknown-model",
+                &hermetic_config(),
+            )
+            .with_canonical_limits("openai");
 
             assert_eq!(config.context_limit, None);
             assert_eq!(config.max_tokens, None);
@@ -944,8 +988,11 @@ mod tests {
             ]);
 
             // "databricks-gpt-5.4-high" should resolve via "databricks-gpt-5.4"
-            let config = ModelConfig::new_or_fail("databricks-gpt-5.4-high")
-                .with_canonical_limits("databricks");
+            let config = ModelConfig::new_or_fail_with_config(
+                "databricks-gpt-5.4-high",
+                &hermetic_config(),
+            )
+            .with_canonical_limits("databricks");
             assert_eq!(config.context_limit, Some(1_050_000));
 
             // "gpt-5.4-xhigh" should resolve via "gpt-5.4"
