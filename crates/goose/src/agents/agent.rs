@@ -4,9 +4,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use futures::stream::BoxStream;
-use futures::{FutureExt, Stream, StreamExt, TryStreamExt, stream};
+use futures::{stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use tracing_futures::Instrument;
 use uuid::Uuid;
 
@@ -15,34 +15,34 @@ use super::final_output_tool::FinalOutputTool;
 use super::mcp_client::GooseMcpHostInfo;
 use super::platform_tools;
 use super::tool_confirmation_router::ToolConfirmationRouter;
-use super::tool_execution::{CHAT_MODE_TOOL_SKIPPED_RESPONSE, DECLINED_RESPONSE, ToolCallResult};
+use super::tool_execution::{ToolCallResult, CHAT_MODE_TOOL_SKIPPED_RESPONSE, DECLINED_RESPONSE};
 use crate::action_required_manager::ActionRequiredManager;
 use crate::agents::extension::{ExtensionConfig, ExtensionResult, ToolInfo};
 use crate::agents::extension_manager::{
-    ExtensionManager, ExtensionManagerCapabilities, get_parameter_names,
+    get_parameter_names, ExtensionManager, ExtensionManagerCapabilities,
 };
 use crate::agents::final_output_tool::{FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME};
-use crate::agents::platform_extensions::MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE;
 use crate::agents::platform_extensions::summon::discover_filesystem_sources;
+use crate::agents::platform_extensions::MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE;
 use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::prompt_manager::PromptManager;
 use crate::agents::retry::{RetryManager, RetryResult};
 use crate::agents::types::{FrontendTool, SessionConfig, SharedProvider, ToolResultReceiver};
 use crate::config::extensions::name_to_key;
 use crate::config::permission::PermissionManager;
-use crate::config::{Config, GooseMode, get_enabled_extensions};
+use crate::config::{get_enabled_extensions, Config, GooseMode};
 use crate::context_mgmt::{
-    DEFAULT_COMPACTION_THRESHOLD, check_if_compaction_needed, compact_messages,
+    check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
 };
 use crate::conversation::message::{
     ActionRequiredData, InferenceMetadata, Message, MessageContent, ProviderMetadata,
     SystemNotificationType, ToolRequest,
 };
-use crate::conversation::{Conversation, debug_conversation_fix, fix_conversation};
+use crate::conversation::{debug_conversation_fix, fix_conversation, Conversation};
 use crate::mcp_utils::ToolResult;
-use crate::permission::PermissionConfirmation;
 use crate::permission::permission_inspector::PermissionInspector;
 use crate::permission::permission_judge::PermissionCheckResult;
+use crate::permission::PermissionConfirmation;
 use crate::providers::base::{PermissionRouting, Provider};
 use crate::providers::errors::ProviderError;
 use crate::recipe::{Author, Recipe, Response, Settings};
@@ -53,7 +53,9 @@ use crate::security::security_inspector::SecurityInspector;
 use crate::session::extension_data::{EnabledExtensionsState, ExtensionState};
 use crate::session::{Session, SessionManager, SessionNameUpdate};
 use crate::tool_inspection::ToolInspectionManager;
-use crate::tool_monitor::{FINDING_ID_REPEATED_ERROR, RepetitionInspector};
+use crate::tool_monitor::{
+    RepetitionInspector, FINDING_ID_REPEATED_CALLS, FINDING_ID_REPEATED_ERROR,
+};
 use crate::utils::is_token_cancelled;
 use regex::Regex;
 use rmcp::model::{
@@ -61,11 +63,11 @@ use rmcp::model::{
     ServerNotification, Tool,
 };
 use serde_json::Value;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
-const DEFAULT_MAX_TURNS: u32 = 1000;
+const DEFAULT_MAX_TURNS: u32 = 100;
 const COMPACTION_THINKING_TEXT: &str = "goose is compacting the conversation...";
 const DEFAULT_FRONTEND_INSTRUCTIONS: &str =
     "The following tools are provided directly by the frontend and will be executed by the frontend when called.";
@@ -541,8 +543,15 @@ impl Agent {
             provider,
         )));
 
-        // Add repetition inspector (lower priority - basic repetition checking)
-        tool_inspection_manager.add_inspector(Box::new(RepetitionInspector::new(None)));
+        // GOOSE_MAX_TOOL_REPETITIONS caps consecutive identical (same name+args) calls
+        // before REP-001 fires; defaults to 5 to catch tight loops without being too
+        // aggressive on legitimate retry patterns.
+        let max_tool_repetitions = Config::global()
+            .get_param::<u32>("GOOSE_MAX_TOOL_REPETITIONS")
+            .unwrap_or(5);
+        tool_inspection_manager.add_inspector(Box::new(RepetitionInspector::new(Some(
+            max_tool_repetitions,
+        ))));
 
         tool_inspection_manager
     }
@@ -2055,12 +2064,17 @@ impl Agent {
                                         yield AgentEvent::Message(final_response.clone());
                                         messages_to_add.push(final_response);
 
-                                        // If a REP-002 deny fired, inject a corrective hint so the
-                                        // model knows to change strategy rather than retry again.
-                                        if let Some(result) = inspection_results.iter().find(|r| {
+                                        // If a REP-001 or REP-002 deny fired, inject a corrective
+                                        // hint so the model knows to change strategy.
+                                        let rep_finding = inspection_results.iter().find(|r| {
                                             r.tool_request_id == request.id
-                                                && r.finding_id.as_deref() == Some(FINDING_ID_REPEATED_ERROR)
-                                        }) {
+                                                && matches!(
+                                                    r.finding_id.as_deref(),
+                                                    Some(FINDING_ID_REPEATED_CALLS)
+                                                        | Some(FINDING_ID_REPEATED_ERROR)
+                                                )
+                                        });
+                                        if let Some(result) = rep_finding {
                                             let hint = format!(
                                                 "Note: {}. Try a different approach — check whether \
                                                  you are using the correct input values, a different \

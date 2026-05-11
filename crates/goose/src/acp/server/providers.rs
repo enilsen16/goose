@@ -446,13 +446,11 @@ impl GooseAcpAgent {
         req: ProviderCatalogListRequest,
     ) -> Result<ProviderCatalogListResponse, agent_client_protocol::Error> {
         let formats = match req.format {
-            Some(format) => vec![
-                format
-                    .parse::<crate::providers::catalog::ProviderFormat>()
-                    .map_err(|error| {
-                        agent_client_protocol::Error::invalid_params().with_detail(error)
-                    })?,
-            ],
+            Some(format) => vec![format
+                .parse::<crate::providers::catalog::ProviderFormat>()
+                .map_err(|error| {
+                    agent_client_protocol::Error::invalid_params().with_detail(error)
+                })?],
             None => vec![
                 crate::providers::catalog::ProviderFormat::OpenAI,
                 crate::providers::catalog::ProviderFormat::Anthropic,

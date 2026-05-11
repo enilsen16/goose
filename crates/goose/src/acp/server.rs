@@ -1,7 +1,7 @@
-use crate::acp::PermissionDecision;
 use crate::acp::custom_requests::*;
 use crate::acp::fs::AcpTools;
 use crate::acp::tools::AcpAwareToolMeta;
+use crate::acp::PermissionDecision;
 use crate::agents::extension::{Envs, PLATFORM_EXTENSIONS};
 use crate::agents::extension_manager::TRUSTED_TOOL_UPDATE_META_KEY;
 use crate::agents::mcp_client::{GooseMcpHostInfo, McpClientTrait};
@@ -55,9 +55,9 @@ use agent_client_protocol::{
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use fs_err as fs;
-use futures::FutureExt;
 use futures::future::{BoxFuture, Either};
 use futures::stream::{self, StreamExt};
+use futures::FutureExt;
 use rmcp::model::{
     AnnotateAble, CallToolResult, RawContent, RawTextContent, ResourceContents, Role,
 };
@@ -2006,7 +2006,8 @@ impl GooseAcpAgent {
                             return;
                         }
 
-                        let system = "Summarize this tool call in a short lowercase phrase (3-8 words). \
+                        let system =
+                            "Summarize this tool call in a short lowercase phrase (3-8 words). \
                              No punctuation. No quotes. Examples: reading project configuration, \
                              checking network connectivity, listing files in src directory";
                         let user_text = format!("Tool: {name}\nArguments: {args_json}");
