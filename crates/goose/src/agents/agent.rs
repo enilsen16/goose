@@ -470,8 +470,12 @@ impl Agent {
             .hook_manager
             .has_hooks(crate::hooks::HookEvent::PostToolUseFailure);
         if !has_success_hook && !has_failure_hook {
+            let tool_name = tool_call.name.to_string();
             let fut = async move {
-                super::large_response_handler::process_tool_response(result.result.await)
+                super::large_response_handler::process_tool_response(
+                    result.result.await,
+                    &tool_name,
+                )
             };
             return ToolCallResult {
                 notification_stream: result.notification_stream,
@@ -490,8 +494,10 @@ impl Agent {
         let category = categorize_tool(&tool_name);
 
         let fut = async move {
-            let processed_result =
-                super::large_response_handler::process_tool_response(result.result.await);
+            let processed_result = super::large_response_handler::process_tool_response(
+                result.result.await,
+                &tool_name,
+            );
             let event = match &processed_result {
                 Ok(call_result) if call_result.is_error != Some(true) => {
                     crate::hooks::HookEvent::PostToolUse
