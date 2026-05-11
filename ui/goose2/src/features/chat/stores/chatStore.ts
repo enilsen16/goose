@@ -75,6 +75,8 @@ interface ChatStoreActions {
   setChatState: (sessionId: string, state: ChatState) => void;
   startToolCall: (sessionId: string, entry: ActiveToolEntry) => void;
   endToolCall: (sessionId: string, toolCallId: string) => void;
+  recordToolCallForLoopDetection: (sessionId: string, toolName: string) => void;
+  clearLoopWarning: (sessionId: string) => void;
   setError: (sessionId: string, error: string | null) => void;
   setConnected: (connected: boolean) => void;
   markSessionRead: (sessionId: string) => void;
@@ -103,6 +105,15 @@ interface ChatStoreActions {
 }
 
 export type ChatStore = ChatStoreState & ChatStoreActions;
+
+const LOOP_WARNING_THRESHOLD = 5;
+
+// Non-reactive per-session loop tracking (not part of Zustand state to avoid
+// triggering subscribers on every tool call).
+const loopTrackingBySession = new Map<
+  string,
+  { lastToolName: string; count: number }
+>();
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   // State
@@ -271,8 +282,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }),
 
   // State
-  setChatState: (sessionId, chatState) =>
-    set((state) => {
+  setChatState: (sessionId, chatState) => {
+    if (chatState === "idle") {
+      loopTrackingBySession.delete(sessionId);
+    }
+    return set((state) => {
       const current =
         state.sessionStateById[sessionId] ?? createInitialSessionRuntime();
       return {
@@ -282,10 +296,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ...current,
             chatState,
             activeTools: chatState === "idle" ? [] : current.activeTools,
+            loopWarning: chatState === "idle" ? null : current.loopWarning,
           },
         },
       };
-    }),
+    });
+  },
 
   startToolCall: (sessionId, entry) =>
     set((state) => {
@@ -313,6 +329,42 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         sessionStateById: {
           ...state.sessionStateById,
           [sessionId]: { ...current, activeTools: next },
+        },
+      };
+    }),
+
+  recordToolCallForLoopDetection: (sessionId, toolName) => {
+    const tracking = loopTrackingBySession.get(sessionId);
+    const isSame = tracking?.lastToolName === toolName;
+    const count = isSame ? (tracking?.count ?? 0) + 1 : 1;
+    loopTrackingBySession.set(sessionId, { lastToolName: toolName, count });
+    if (count < LOOP_WARNING_THRESHOLD) return;
+    set((state) => {
+      const current = state.sessionStateById[sessionId];
+      if (!current) return state;
+      if (
+        current.loopWarning?.toolName === toolName &&
+        current.loopWarning.count === count
+      ) {
+        return state;
+      }
+      return {
+        sessionStateById: {
+          ...state.sessionStateById,
+          [sessionId]: { ...current, loopWarning: { toolName, count } },
+        },
+      };
+    });
+  },
+
+  clearLoopWarning: (sessionId) =>
+    set((state) => {
+      const current = state.sessionStateById[sessionId];
+      if (!current?.loopWarning) return state;
+      return {
+        sessionStateById: {
+          ...state.sessionStateById,
+          [sessionId]: { ...current, loopWarning: null },
         },
       };
     }),
@@ -521,8 +573,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   // Cleanup
   cleanupSession: (sessionId) => {
-    // Discard any orphaned replay buffer so module-level Map doesn't leak.
+    // Discard any orphaned replay/loop-tracking state so module-level Maps don't leak.
     clearReplayBuffer(sessionId);
+    loopTrackingBySession.delete(sessionId);
     set((state) => {
       const { [sessionId]: _, ...rest } = state.messagesBySession;
       const { [sessionId]: __, ...remainingSessionState } =

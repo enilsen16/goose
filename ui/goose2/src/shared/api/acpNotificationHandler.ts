@@ -358,11 +358,13 @@ function handleLive(sessionId: string, update: SessionUpdate): void {
       };
       store.setStreamingMessageId(sessionId, messageId);
       store.appendToStreamingMessage(sessionId, toolRequest);
+      const toolName = identity.toolName ?? update.title ?? "";
       store.startToolCall(sessionId, {
         id: update.toolCallId,
-        name: identity.toolName ?? update.title ?? "",
+        name: toolName,
         startedAt: Date.now(),
       });
+      store.recordToolCallForLoopDetection(sessionId, toolName);
       break;
     }
 

@@ -238,5 +238,10 @@
       "labeled": "{{label}} ({{count}} step)",
       "labeled_other": "{{label}} ({{count}} steps)"
     }
+  },
+  "loopWarning": {
+    "message": "Agent has called \"{{toolName}}\" {{count}} times in a row — it may be stuck.",
+    "dismiss": "Dismiss",
+    "stop": "Stop Session"
   }
 }

@@ -52,7 +52,9 @@ use crate::security::security_inspector::SecurityInspector;
 use crate::session::extension_data::{EnabledExtensionsState, ExtensionState};
 use crate::session::{Session, SessionManager, SessionNameUpdate};
 use crate::tool_inspection::ToolInspectionManager;
-use crate::tool_monitor::{RepetitionInspector, FINDING_ID_REPEATED_ERROR};
+use crate::tool_monitor::{
+    RepetitionInspector, FINDING_ID_REPEATED_CALLS, FINDING_ID_REPEATED_ERROR,
+};
 use crate::utils::is_token_cancelled;
 use regex::Regex;
 use rmcp::model::{
@@ -64,7 +66,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
-const DEFAULT_MAX_TURNS: u32 = 1000;
+const DEFAULT_MAX_TURNS: u32 = 100;
 const COMPACTION_THINKING_TEXT: &str = "goose is compacting the conversation...";
 
 /// Context needed for the reply function
@@ -360,8 +362,15 @@ impl Agent {
             provider,
         )));
 
-        // Add repetition inspector (lower priority - basic repetition checking)
-        tool_inspection_manager.add_inspector(Box::new(RepetitionInspector::new(None)));
+        // GOOSE_MAX_TOOL_REPETITIONS caps consecutive identical (same name+args) calls
+        // before REP-001 fires; defaults to 5 to catch tight loops without being too
+        // aggressive on legitimate retry patterns.
+        let max_tool_repetitions = Config::global()
+            .get_param::<u32>("GOOSE_MAX_TOOL_REPETITIONS")
+            .unwrap_or(5);
+        tool_inspection_manager.add_inspector(Box::new(RepetitionInspector::new(Some(
+            max_tool_repetitions,
+        ))));
 
         tool_inspection_manager
     }
@@ -1782,12 +1791,17 @@ impl Agent {
                                         yield AgentEvent::Message(final_response.clone());
                                         messages_to_add.push(final_response);
 
-                                        // If a REP-002 deny fired, inject a corrective hint so the
-                                        // model knows to change strategy rather than retry again.
-                                        if let Some(result) = inspection_results.iter().find(|r| {
+                                        // If a REP-001 or REP-002 deny fired, inject a corrective
+                                        // hint so the model knows to change strategy.
+                                        let rep_finding = inspection_results.iter().find(|r| {
                                             r.tool_request_id == request.id
-                                                && r.finding_id.as_deref() == Some(FINDING_ID_REPEATED_ERROR)
-                                        }) {
+                                                && matches!(
+                                                    r.finding_id.as_deref(),
+                                                    Some(FINDING_ID_REPEATED_CALLS)
+                                                        | Some(FINDING_ID_REPEATED_ERROR)
+                                                )
+                                        });
+                                        if let Some(result) = rep_finding {
                                             let hint = format!(
                                                 "Note: {}. Try a different approach — check whether \
                                                  you are using the correct input values, a different \

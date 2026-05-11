@@ -5,6 +5,7 @@ import { MessageTimeline } from "./MessageTimeline";
 import { ChatInput } from "./ChatInput";
 import { LoadingGoose } from "./LoadingGoose";
 import { ChatLoadingSkeleton } from "./ChatLoadingSkeleton";
+import { LoopWarningBanner } from "./LoopWarningBanner";
 import { useChatSessionStore } from "../stores/chatSessionStore";
 import { ArtifactPolicyProvider } from "../hooks/ArtifactPolicyContext";
 import { ChatContextPanel } from "./ChatContextPanel";
@@ -123,6 +124,11 @@ export function ChatView({
               />
             ) : null}
           </AnimatePresence>
+
+          <LoopWarningBanner
+            sessionId={sessionId}
+            onStop={controller.stopStreaming}
+          />
 
           <ChatInput
             className={shouldOverlapComposer ? "-mt-4" : undefined}

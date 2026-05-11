@@ -238,5 +238,10 @@
       "labeled": "{{label}} ({{count}} paso)",
       "labeled_other": "{{label}} ({{count}} pasos)"
     }
+  },
+  "loopWarning": {
+    "message": "El agente ha llamado \"{{toolName}}\" {{count}} veces seguidas — puede estar atascado.",
+    "dismiss": "Descartar",
+    "stop": "Detener sesión"
   }
 }

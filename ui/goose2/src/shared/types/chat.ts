@@ -34,6 +34,11 @@ export interface ActiveToolEntry {
   startedAt: number;
 }
 
+export interface LoopWarning {
+  toolName: string;
+  count: number;
+}
+
 export interface SessionChatRuntime {
   chatState: ChatState;
   tokenState: TokenState;
@@ -43,6 +48,7 @@ export interface SessionChatRuntime {
   error: string | null;
   hasUnread: boolean;
   activeTools: ActiveToolEntry[];
+  loopWarning: LoopWarning | null;
 }
 
 export const INITIAL_SESSION_CHAT_RUNTIME: SessionChatRuntime = {
@@ -54,6 +60,7 @@ export const INITIAL_SESSION_CHAT_RUNTIME: SessionChatRuntime = {
   error: null,
   hasUnread: false,
   activeTools: [],
+  loopWarning: null,
 };
 
 // Session
