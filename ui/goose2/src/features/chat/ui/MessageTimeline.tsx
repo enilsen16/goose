@@ -7,6 +7,7 @@ import type { McpAppMessageHandler } from "./mcpAppTypes";
 import { getTextContent, type Message } from "@/shared/types/messages";
 
 const AUTO_SCROLL_THRESHOLD_PX = 180;
+const RESUME_AUTO_SCROLL_THRESHOLD_PX = 150;
 const MCP_APP_STICKY_SCROLL_MS = 1500;
 
 interface MessageTimelineProps {
@@ -73,6 +74,8 @@ export function MessageTimeline({
   const stickyScrollUntilRef = useRef(0);
   const autoScrollTimersRef = useRef<number[]>([]);
   const lastMcpAppSignatureRef = useRef<string | null>(null);
+  const userScrolledAwayRef = useRef(false);
+  const prevScrollTopRef = useRef<number | null>(null);
   const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
   const visibleMessages = messages.filter(
     (m) =>
@@ -106,35 +109,14 @@ export function MessageTimeline({
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     const container = containerRef.current;
-    if (!container) {
-      return;
-    }
-
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior,
-    });
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior });
   }, []);
 
   const scrollToBottomIfNearBottom = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
-      const container = containerRef.current;
-      if (!container) {
-        return;
-      }
-
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
       const stickyActive = stickyScrollUntilRef.current > performance.now();
-
-      if (
-        !isNearBottomRef.current &&
-        !stickyActive &&
-        distanceFromBottom >= AUTO_SCROLL_THRESHOLD_PX
-      ) {
-        return;
-      }
-
+      if (userScrolledAwayRef.current && !stickyActive) return;
       scrollToBottom(behavior);
     },
     [scrollToBottom],
@@ -192,10 +174,7 @@ export function MessageTimeline({
       const delta = elementRect.bottom - containerRect.bottom + 16;
 
       if (delta > 0) {
-        nextContainer.scrollBy({
-          top: delta,
-          behavior: "auto",
-        });
+        nextContainer.scrollBy({ top: delta, behavior: "auto" });
       }
     };
 
@@ -291,10 +270,19 @@ export function MessageTimeline({
     if (!container) return;
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    isNearBottomRef.current = distanceFromBottom < AUTO_SCROLL_THRESHOLD_PX;
-    if (distanceFromBottom >= AUTO_SCROLL_THRESHOLD_PX) {
+
+    const prev = prevScrollTopRef.current;
+    const isScrollingUp = prev !== null && scrollTop < prev;
+    prevScrollTopRef.current = scrollTop;
+
+    if (isScrollingUp) {
+      userScrolledAwayRef.current = true;
       stickyScrollUntilRef.current = 0;
+    } else if (distanceFromBottom < RESUME_AUTO_SCROLL_THRESHOLD_PX) {
+      userScrolledAwayRef.current = false;
     }
+
+    isNearBottomRef.current = distanceFromBottom < AUTO_SCROLL_THRESHOLD_PX;
   };
 
   if (visibleMessages.length === 0) {
