@@ -165,10 +165,11 @@ fn project_settings_path(project_root: &Path, local: bool) -> PathBuf {
 }
 
 fn read_settings(path: &Path) -> anyhow::Result<Option<PluginSettings>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let text = std::fs::read_to_string(path)?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
     let parsed: PluginSettings = serde_json::from_str(&text)?;
     Ok(Some(parsed))
 }

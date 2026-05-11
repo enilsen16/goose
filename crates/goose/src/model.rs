@@ -140,7 +140,11 @@ impl<'de> Deserialize<'de> for ModelConfig {
 
 impl ModelConfig {
     pub fn new(model_name: &str) -> Result<Self, ConfigError> {
-        Self::new_base(model_name.to_string(), None, crate::config::Config::global())
+        Self::new_base(
+            model_name.to_string(),
+            None,
+            crate::config::Config::global(),
+        )
     }
 
     /// Like [`ModelConfig::new`] but reads `GOOSE_CONTEXT_LIMIT` and
@@ -952,11 +956,9 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let config = ModelConfig::new_or_fail_with_config(
-                "moonshotai/kimi-k2.6",
-                &hermetic_config(),
-            )
-            .with_canonical_limits("nvidia");
+            let config =
+                ModelConfig::new_or_fail_with_config("moonshotai/kimi-k2.6", &hermetic_config())
+                    .with_canonical_limits("nvidia");
 
             assert_eq!(config.context_limit, Some(262_144));
             assert_eq!(config.max_tokens, None);
@@ -969,11 +971,9 @@ mod tests {
                 ("GOOSE_MAX_TOKENS", None::<&str>),
                 ("GOOSE_CONTEXT_LIMIT", None::<&str>),
             ]);
-            let config = ModelConfig::new_or_fail_with_config(
-                "totally-unknown-model",
-                &hermetic_config(),
-            )
-            .with_canonical_limits("openai");
+            let config =
+                ModelConfig::new_or_fail_with_config("totally-unknown-model", &hermetic_config())
+                    .with_canonical_limits("openai");
 
             assert_eq!(config.context_limit, None);
             assert_eq!(config.max_tokens, None);
@@ -988,11 +988,9 @@ mod tests {
             ]);
 
             // "databricks-gpt-5.4-high" should resolve via "databricks-gpt-5.4"
-            let config = ModelConfig::new_or_fail_with_config(
-                "databricks-gpt-5.4-high",
-                &hermetic_config(),
-            )
-            .with_canonical_limits("databricks");
+            let config =
+                ModelConfig::new_or_fail_with_config("databricks-gpt-5.4-high", &hermetic_config())
+                    .with_canonical_limits("databricks");
             assert_eq!(config.context_limit, Some(1_050_000));
 
             // "gpt-5.4-xhigh" should resolve via "gpt-5.4"

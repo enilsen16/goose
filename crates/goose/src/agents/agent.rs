@@ -460,6 +460,25 @@ impl Agent {
         tool_call: &CallToolRequestParams,
         session: &Session,
     ) -> ToolCallResult {
+        // Default-install case: no PostToolUse/PostToolUseFailure hooks are
+        // registered, so skip cloning session id, working_dir, tool name, and
+        // (potentially multi-KB) tool args for every tool call.
+        let has_success_hook = self
+            .hook_manager
+            .has_hooks(crate::hooks::HookEvent::PostToolUse);
+        let has_failure_hook = self
+            .hook_manager
+            .has_hooks(crate::hooks::HookEvent::PostToolUseFailure);
+        if !has_success_hook && !has_failure_hook {
+            let fut = async move {
+                super::large_response_handler::process_tool_response(result.result.await)
+            };
+            return ToolCallResult {
+                notification_stream: result.notification_stream,
+                result: Box::new(fut.boxed()),
+            };
+        }
+
         let hook_manager = self.hook_manager.clone();
         let session_id = session.id.clone();
         let working_dir = session.working_dir.to_string_lossy().to_string();
