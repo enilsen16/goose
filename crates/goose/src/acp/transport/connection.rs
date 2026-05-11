@@ -47,11 +47,22 @@ impl OutboundStream {
         match guard.as_mut() {
             Some(buf) => {
                 if buf.len() >= PRE_SUBSCRIBE_BUFFER_CAPACITY {
+                    // No subscriber attached before the buffer filled — typical
+                    // for WebSocket-only clients, where connection_stream and
+                    // session_streams[sid] receive every routed message but
+                    // never get subscribed (only HTTP/SSE subscribes to those).
+                    // Abandon the buffer to stop the per-push Mutex + VecDeque
+                    // churn; future pushes go straight to broadcast (a no-op
+                    // when no receivers exist). Late subscribers get an empty
+                    // replay — they had already missed > capacity messages.
                     warn!(
-                        "Pre-subscribe buffer full ({} messages); dropping oldest",
+                        "Pre-subscribe buffer full ({} messages); abandoning buffer",
                         PRE_SUBSCRIBE_BUFFER_CAPACITY
                     );
-                    buf.pop_front();
+                    *guard = None;
+                    drop(guard);
+                    let _ = self.tx.send(msg);
+                    return;
                 }
                 buf.push_back(msg);
             }
@@ -407,7 +418,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pre_subscribe_buffer_is_bounded() {
+    async fn pre_subscribe_buffer_abandons_on_overflow() {
         let (conn, agent_tx) = fake_connection();
         conn.start_router().await;
 
@@ -420,6 +431,27 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         let (replay, _rx) = conn.subscribe_connection_stream().await;
-        assert_eq!(replay.len(), PRE_SUBSCRIBE_BUFFER_CAPACITY);
+        assert!(
+            replay.is_empty(),
+            "buffer should be abandoned after overflow, got {} replay messages",
+            replay.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_subscribe_buffer_replays_when_under_capacity() {
+        let (conn, agent_tx) = fake_connection();
+        conn.start_router().await;
+
+        for i in 0..10 {
+            agent_tx
+                .send(format!(r#"{{"id":{},"result":{{}}}}"#, i))
+                .unwrap();
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let (replay, _rx) = conn.subscribe_connection_stream().await;
+        assert_eq!(replay.len(), 10);
     }
 }
