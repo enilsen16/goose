@@ -85,7 +85,7 @@ fn read_tool() -> Tool {
         .clone();
     Tool::new(
         "read",
-        "Read a text file from disk. Pass `line` and `limit` to read a specific range; avoid reading whole large files when you only need a portion.",
+        "Read a text file from disk. Pass `line` and `limit` to read a specific range; avoid reading whole large files when you only need a portion. To find a symbol or string across files, run a search (e.g. `rg` via shell) instead of opening multiple `read` calls.",
         schema,
     )
     .annotate(

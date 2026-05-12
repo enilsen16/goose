@@ -51,6 +51,11 @@ fn developer_instructions() -> &'static str {
             `limit` parameters when available, otherwise `Get-Content -TotalCount` or
             `Select-Object -Skip/-First`). Don't re-read the same file across turns.
 
+            Independent tool calls can be emitted in a single turn — don't serialize reads or
+            shells that don't depend on each other. To find a symbol or string, run a search
+            (findstr or Select-String via shell) first; don't open multiple `read` calls just
+            to grep.
+
             For tasks with 3 or more steps, write your plan once with `todo_write` — it's
             auto-injected on every turn. Update items in place; don't restate the plan in
             `thinking` each step.
@@ -75,6 +80,10 @@ fn developer_instructions() -> &'static str {
             When reading large files, fetch only the range you need (the `read` tool's `line` and
             `limit` parameters when available, otherwise `sed -n 'A,Bp'`). Don't re-read the same
             file across turns.
+
+            Independent tool calls can be emitted in a single turn — don't serialize reads or
+            shells that don't depend on each other. To find a symbol or string, run a search
+            (`rg`) first; don't open multiple `read` calls just to grep.
 
             For tasks with 3 or more steps, write your plan once with `todo_write` — it's
             auto-injected on every turn. Update items in place; don't restate the plan in
