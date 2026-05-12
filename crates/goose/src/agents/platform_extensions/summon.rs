@@ -553,9 +553,12 @@ impl SummonClient {
              - Delegates know only instructions + source content\n\
              - Delegates cannot coordinate. Same-file work = conflicts.\n\
              - Parallel: async: true, then load(taskId) to wait and get results. Single: sync.\n\n\
+             Fan-out trigger: when you have 3 or more structurally-similar subtasks (same shape,\n\
+             different inputs — e.g. implement the same adapter for each of A, B, C), dispatch\n\
+             each with async: true instead of executing them serially. Hard cap: 5 concurrent\n\
+             (GOOSE_MAX_BACKGROUND_TASKS). Pattern: fan out → load(taskId) per delegate → synthesize.\n\n\
              Research (read-only): parallelize freely - delegates explore and report back.\n\
-             Work (writes): partition files strictly - no two delegates touch the same file.\n\n\
-             Decompose → async delegates → load(taskId) for each → synthesize."
+             Work (writes): partition files strictly - no two delegates touch the same file."
                 .to_string(),
             schema.as_object().unwrap().clone(),
         )
