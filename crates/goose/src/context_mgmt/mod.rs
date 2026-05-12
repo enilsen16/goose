@@ -452,11 +452,7 @@ pub fn compute_tool_call_cutoff(context_limit: usize, compaction_threshold: f64)
         DEFAULT_COMPACTION_THRESHOLD
     };
     let effective_limit = (context_limit as f64 * threshold) as usize;
-    // Combined with the `eligible > cutoff + BATCH_SIZE` trigger, this fires
-    // summarization at >26 historic tool calls for 200K-context models and >90
-    // for 1M-context models; the 80 ceiling prevents mega-context (5M+) models
-    // from waiting on hundreds of tool calls before any summarization.
-    (2 * effective_limit / 20_000).clamp(10, 80)
+    (3 * effective_limit / 20_000).clamp(10, 500)
 }
 
 pub fn tool_ids_to_summarize(
@@ -766,20 +762,20 @@ mod tests {
     #[test]
     fn test_compute_tool_call_cutoff_scales_with_context() {
         // Default threshold (0.8)
-        assert_eq!(compute_tool_call_cutoff(128_000, 0.8), 10); // 102K effective, clamped
-        assert_eq!(compute_tool_call_cutoff(200_000, 0.8), 16); // 160K effective
-        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.8), 80); // 800K effective, hits ceiling
-                                                                  // Clamp at minimum
+        assert_eq!(compute_tool_call_cutoff(128_000, 0.8), 15); // 102K effective
+        assert_eq!(compute_tool_call_cutoff(200_000, 0.8), 24); // 160K effective
+        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.8), 120); // 800K effective
+                                                                   // Clamp at minimum
         assert_eq!(compute_tool_call_cutoff(50_000, 0.8), 10);
         assert_eq!(compute_tool_call_cutoff(10_000, 0.8), 10);
-        // Clamp at maximum (80) — mega-context models no longer wait for 500 tool calls
-        assert_eq!(compute_tool_call_cutoff(10_000_000, 0.8), 80);
+        // Clamp at maximum (500)
+        assert_eq!(compute_tool_call_cutoff(10_000_000, 0.8), 500);
         // Lower compaction threshold means earlier summarization
-        assert_eq!(compute_tool_call_cutoff(200_000, 0.3), 10); // 60K effective, clamped
-        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.5), 50); // 500K effective
+        assert_eq!(compute_tool_call_cutoff(200_000, 0.3), 10); // 60K effective
+        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.5), 75); // 500K effective
                                                                   // Invalid threshold falls back to default 0.8
-        assert_eq!(compute_tool_call_cutoff(200_000, 0.0), 16);
-        assert_eq!(compute_tool_call_cutoff(200_000, -1.0), 16);
+        assert_eq!(compute_tool_call_cutoff(200_000, 0.0), 24); // falls back to 0.8
+        assert_eq!(compute_tool_call_cutoff(200_000, -1.0), 24); // falls back to 0.8
     }
 
     #[test]
