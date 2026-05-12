@@ -452,10 +452,10 @@ pub fn compute_tool_call_cutoff(context_limit: usize, compaction_threshold: f64)
         DEFAULT_COMPACTION_THRESHOLD
     };
     let effective_limit = (context_limit as f64 * threshold) as usize;
-    // Lower coefficient + tighter ceiling so older tool pairs get summarized earlier,
-    // especially on large-context models. Combined with the `eligible > cutoff + BATCH_SIZE`
-    // trigger, this makes 200K-context users summarize at >26 historic tool calls
-    // (was >34) and 1M-context users at >90 (was >130).
+    // Combined with the `eligible > cutoff + BATCH_SIZE` trigger, this fires
+    // summarization at >26 historic tool calls for 200K-context models and >90
+    // for 1M-context models; the 80 ceiling prevents mega-context (5M+) models
+    // from waiting on hundreds of tool calls before any summarization.
     (2 * effective_limit / 20_000).clamp(10, 80)
 }
 
