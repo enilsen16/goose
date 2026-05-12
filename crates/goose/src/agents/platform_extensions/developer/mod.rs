@@ -50,6 +50,10 @@ fn developer_instructions() -> &'static str {
             When reading large files, fetch only the range you need (the `read` tool's `line` and
             `limit` parameters when available, otherwise `Get-Content -TotalCount` or
             `Select-Object -Skip/-First`). Don't re-read the same file across turns.
+
+            For tasks with 3 or more steps, write your plan once with `todo_write` — it's
+            auto-injected on every turn. Update items in place; don't restate the plan in
+            `thinking` each step.
         "}
     } else {
         indoc! {"
@@ -71,6 +75,10 @@ fn developer_instructions() -> &'static str {
             When reading large files, fetch only the range you need (the `read` tool's `line` and
             `limit` parameters when available, otherwise `sed -n 'A,Bp'`). Don't re-read the same
             file across turns.
+
+            For tasks with 3 or more steps, write your plan once with `todo_write` — it's
+            auto-injected on every turn. Update items in place; don't restate the plan in
+            `thinking` each step.
 
             When running Python scripts or commands, always use `python3` instead of `python`.
         "}

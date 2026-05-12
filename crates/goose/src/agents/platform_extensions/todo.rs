@@ -35,12 +35,14 @@ impl TodoClient {
             )
             .with_instructions(
                 indoc! {r#"
-                Your todo content is automatically available in your context.
+                Your todo content is auto-injected into every turn — write it once, update in
+                place, don't re-derive the plan in `thinking`.
 
                 Workflow:
-                - Start: write initial checklist
-                - During: update progress
-                - End: verify all complete
+                - 3+ step tasks: write the checklist before your first tool call.
+                - After each step: flip item status. Don't rewrite the plan from scratch unless
+                  the goal changed.
+                - Before declaring done: verify every box is checked.
 
                 Template:
                 - [x] Requirement 1
