@@ -77,14 +77,18 @@ export function MessageTimeline({
   const userScrolledAwayRef = useRef(false);
   const prevScrollTopRef = useRef<number | null>(null);
   const [pulsingMessageId, setPulsingMessageId] = useState<string | null>(null);
-  const visibleMessages = messages.filter(
-    (m) =>
-      m.metadata?.userVisible !== false &&
-      !(
-        m.role === "assistant" &&
-        m.content.length === 0 &&
-        m.metadata?.completionStatus === "inProgress"
+  const visibleMessages = useMemo(
+    () =>
+      messages.filter(
+        (m) =>
+          m.metadata?.userVisible !== false &&
+          !(
+            m.role === "assistant" &&
+            m.content.length === 0 &&
+            m.metadata?.completionStatus === "inProgress"
+          ),
       ),
+    [messages],
   );
   const resolvedScrollTargetMessageId = useMemo(() => {
     if (scrollTargetMessageId) {
