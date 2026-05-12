@@ -12,6 +12,11 @@ import type {
   ToolResponseContent,
 } from "@/shared/types/messages";
 import type { AcpNotificationHandler } from "./acpConnection";
+import {
+  META_ACCUMULATED_INPUT,
+  META_ACCUMULATED_OUTPUT,
+  META_ACCUMULATED_TOTAL,
+} from "./acpMetaKeys";
 import { handleReplayUserMessageChunk } from "./acpSkillReplayChips";
 import {
   attachMcpAppPayload,
@@ -512,10 +517,18 @@ function handleShared(sessionId: string, update: SessionUpdate): void {
 
     case "usage_update": {
       const usage = update as SessionUpdate & { sessionUpdate: "usage_update" };
+      const meta = usage._meta;
+      const num = (key: string): number => {
+        const v = meta?.[key];
+        return typeof v === "number" ? v : 0;
+      };
 
       useChatStore.getState().updateTokenState(sessionId, {
-        accumulatedTotal: usage.used,
+        totalTokens: usage.used,
         contextLimit: usage.size,
+        accumulatedTotal: num(META_ACCUMULATED_TOTAL),
+        accumulatedInput: num(META_ACCUMULATED_INPUT),
+        accumulatedOutput: num(META_ACCUMULATED_OUTPUT),
       });
       break;
     }

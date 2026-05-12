@@ -84,6 +84,8 @@ export interface ChatInputProjectPicker {
 export interface ChatInputContextUsage {
   contextTokens?: number;
   contextLimit?: number;
+  /** Total tokens billed across the entire session (sum of every model call's input + output). */
+  accumulatedTotal?: number;
   isContextUsageReady?: boolean;
   onCompactContext?: () => Promise<unknown> | undefined;
   canCompactContext?: boolean;

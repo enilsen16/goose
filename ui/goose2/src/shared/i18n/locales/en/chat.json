@@ -193,7 +193,9 @@
     "voiceInputDisabled": "Configure a voice provider in Settings to enable dictation",
     "voiceInputRecording": "Listening...",
     "voiceInputTranscribing": "Transcribing...",
-    "voiceInputAutoSubmitHint": "Say \"submit\" to send"
+    "voiceInputAutoSubmitHint": "Say \"submit\" to send",
+    "accumulatedSession": "Accumulated this session",
+    "accumulatedTokens": "{{tokens}} tokens billed"
   },
   "tools": {
     "content": "Content",

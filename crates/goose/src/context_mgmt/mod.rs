@@ -20,6 +20,26 @@ pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.8;
 
 const TOOLCALL_SUMMARIZATION_BATCH_SIZE: usize = 10;
 
+/// Tools whose request/response pairs are NEVER summarized. State-change tools
+/// (file edits, todo writes, plan updates) lose their value when narrated; the
+/// agent's reasoning depends on knowing the exact change. Both the unprefixed
+/// and `developer__`/`platform__` prefixed forms are listed because the tool
+/// name reaching this module varies by provider.
+const NEVER_SUMMARIZE_TOOLS: &[&str] = &[
+    "write",
+    "edit",
+    "text_editor",
+    "developer__write",
+    "developer__edit",
+    "developer__text_editor",
+    "todo_write",
+    "platform__todo_write",
+];
+
+fn is_summarizable_tool(name: &str) -> bool {
+    !NEVER_SUMMARIZE_TOOLS.contains(&name)
+}
+
 fn tool_pair_summarization_enabled() -> bool {
     Config::global()
         .get_param::<bool>("GOOSE_TOOL_PAIR_SUMMARIZATION")
@@ -432,7 +452,11 @@ pub fn compute_tool_call_cutoff(context_limit: usize, compaction_threshold: f64)
         DEFAULT_COMPACTION_THRESHOLD
     };
     let effective_limit = (context_limit as f64 * threshold) as usize;
-    (3 * effective_limit / 20_000).clamp(10, 500)
+    // Lower coefficient + tighter ceiling so older tool pairs get summarized earlier,
+    // especially on large-context models. Combined with the `eligible > cutoff + BATCH_SIZE`
+    // trigger, this makes 200K-context users summarize at >26 historic tool calls
+    // (was >34) and 1M-context users at >90 (was >130).
+    (2 * effective_limit / 20_000).clamp(10, 80)
 }
 
 pub fn tool_ids_to_summarize(
@@ -451,6 +475,15 @@ pub fn tool_ids_to_summarize(
 
         for content in &msg.content {
             if let MessageContent::ToolRequest(req) = content {
+                let Ok(call) = &req.tool_call else {
+                    // Malformed tool calls (parse errors) carry no name to check
+                    // and won't summarize cleanly — skip rather than waste a
+                    // model call on garbage input.
+                    continue;
+                };
+                if !is_summarizable_tool(&call.name) {
+                    continue;
+                }
                 tool_call_ids.push(req.id.clone());
             }
         }
@@ -503,17 +536,22 @@ pub async fn summarize_tool_call(
     let user_message = Message::user().with_text(formatted);
     let summarization_request = vec![user_message];
 
+    // Structured output preserves the tool name and arguments verbatim — narrative
+    // summaries like "A call to github was made..." were stripping the actual
+    // command and parameters, leaving the agent unable to reason about what was
+    // tried. The model still summarizes the response body (which can be huge).
     let system_prompt = indoc! {r#"
-                Your task is to summarize a tool call & response pair to save tokens.
+                Summarize the tool_request and tool_response below in the structured
+                form shown. Preserve tool name and arguments verbatim — do not paraphrase
+                them. Output exactly these lines, each starting with the field name and a colon:
 
-                Reply with a single message that describes what happened. Typically a tool call
-                asks for something using a bunch of parameters and then the result is also some
-                structured output. So the tool might ask to look up something on github and the
-                reply might be a json document. So you could reply with something like:
+                tool: <tool name from tool_request, verbatim>
+                args: <arguments from tool_request as a single line, truncated to ~200 chars with "…" if longer>
+                status: success
+                result: <one short paragraph (≤300 chars) describing the response: key fields, counts, file paths, error text — whatever helps a future turn reason about what was learned>
 
-                "A call to github was made to get the project status"
-
-                if that is what it was.
+                Use `status: error` if the response indicates failure.
+                Do not narrate. Do not summarize the tool name. Do not omit fields.
             "#};
 
     let (mut response, _) = provider
@@ -728,20 +766,20 @@ mod tests {
     #[test]
     fn test_compute_tool_call_cutoff_scales_with_context() {
         // Default threshold (0.8)
-        assert_eq!(compute_tool_call_cutoff(128_000, 0.8), 15); // 102K effective
-        assert_eq!(compute_tool_call_cutoff(200_000, 0.8), 24); // 160K effective
-        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.8), 120); // 800K effective
-                                                                   // Clamp at minimum
+        assert_eq!(compute_tool_call_cutoff(128_000, 0.8), 10); // 102K effective, clamped
+        assert_eq!(compute_tool_call_cutoff(200_000, 0.8), 16); // 160K effective
+        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.8), 80); // 800K effective, hits ceiling
+                                                                  // Clamp at minimum
         assert_eq!(compute_tool_call_cutoff(50_000, 0.8), 10);
         assert_eq!(compute_tool_call_cutoff(10_000, 0.8), 10);
-        // Clamp at maximum (500)
-        assert_eq!(compute_tool_call_cutoff(10_000_000, 0.8), 500);
+        // Clamp at maximum (80) — mega-context models no longer wait for 500 tool calls
+        assert_eq!(compute_tool_call_cutoff(10_000_000, 0.8), 80);
         // Lower compaction threshold means earlier summarization
-        assert_eq!(compute_tool_call_cutoff(200_000, 0.3), 10); // 60K effective
-        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.5), 75); // 500K effective
+        assert_eq!(compute_tool_call_cutoff(200_000, 0.3), 10); // 60K effective, clamped
+        assert_eq!(compute_tool_call_cutoff(1_000_000, 0.5), 50); // 500K effective
                                                                   // Invalid threshold falls back to default 0.8
-        assert_eq!(compute_tool_call_cutoff(200_000, 0.0), 24); // falls back to 0.8
-        assert_eq!(compute_tool_call_cutoff(200_000, -1.0), 24); // falls back to 0.8
+        assert_eq!(compute_tool_call_cutoff(200_000, 0.0), 16);
+        assert_eq!(compute_tool_call_cutoff(200_000, -1.0), 16);
     }
 
     #[test]
@@ -775,6 +813,59 @@ mod tests {
         assert_eq!(result.len(), TOOLCALL_SUMMARIZATION_BATCH_SIZE);
         assert_eq!(result[0], "call0");
         assert_eq!(result[9], "call9");
+    }
+
+    #[test]
+    fn test_is_summarizable_tool_rejects_state_change_tools() {
+        assert!(!is_summarizable_tool("write"));
+        assert!(!is_summarizable_tool("edit"));
+        assert!(!is_summarizable_tool("developer__write"));
+        assert!(!is_summarizable_tool("developer__edit"));
+        assert!(!is_summarizable_tool("developer__text_editor"));
+        assert!(!is_summarizable_tool("todo_write"));
+        assert!(!is_summarizable_tool("platform__todo_write"));
+    }
+
+    #[test]
+    fn test_is_summarizable_tool_allows_other_tools() {
+        assert!(is_summarizable_tool("shell"));
+        assert!(is_summarizable_tool("developer__shell"));
+        assert!(is_summarizable_tool("read"));
+        assert!(is_summarizable_tool("github__create_pr"));
+    }
+
+    #[test]
+    fn test_tool_ids_to_summarize_skips_allowlisted_tools() {
+        // 20 pairs total: 16 shell (summarizable), 4 write (allowlisted).
+        // Effective eligible count after filter = 16, which exceeds cutoff+batch.
+        let mut messages = vec![Message::user().with_text("hello")];
+        for i in 0..16 {
+            messages.extend(create_tool_pair(
+                &format!("shell{}", i),
+                &format!("resp_shell{}", i),
+                "shell",
+                "ok",
+            ));
+        }
+        for i in 0..4 {
+            messages.extend(create_tool_pair(
+                &format!("write{}", i),
+                &format!("resp_write{}", i),
+                "developer__write",
+                "ok",
+            ));
+        }
+        let conversation = Conversation::new_unvalidated(messages);
+        let result = tool_ids_to_summarize(&conversation, 5, 0);
+        assert_eq!(result.len(), TOOLCALL_SUMMARIZATION_BATCH_SIZE);
+        // None of the returned IDs should be the allowlisted write tool calls.
+        for id in &result {
+            assert!(
+                !id.starts_with("write"),
+                "allowlisted write tool should never be summarized, got id={}",
+                id
+            );
+        }
     }
 
     #[test]

@@ -358,7 +358,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             tokenState: {
               inputTokens,
               outputTokens,
-              totalTokens: inputTokens + outputTokens,
+              totalTokens: partial.totalTokens ?? inputTokens + outputTokens,
               accumulatedInput,
               accumulatedOutput,
               accumulatedTotal,
