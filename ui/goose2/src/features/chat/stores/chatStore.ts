@@ -106,7 +106,11 @@ interface ChatStoreActions {
 
 export type ChatStore = ChatStoreState & ChatStoreActions;
 
-const LOOP_WARNING_THRESHOLD = 5;
+// 5 was too aggressive for normal investigation flows — reading 5+ files via
+// shell cat or 5+ analyze calls during a codebase tour fires the banner even
+// though there's no actual loop. 8 is high enough to skip routine multi-file
+// reads while still catching genuine same-tool-same-args repetition.
+const LOOP_WARNING_THRESHOLD = 8;
 
 // Non-reactive per-session loop tracking (not part of Zustand state to avoid
 // triggering subscribers on every tool call).
