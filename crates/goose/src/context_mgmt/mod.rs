@@ -452,6 +452,9 @@ pub fn compute_tool_call_cutoff(context_limit: usize, compaction_threshold: f64)
         DEFAULT_COMPACTION_THRESHOLD
     };
     let effective_limit = (context_limit as f64 * threshold) as usize;
+    // ~1 cutoff unit per 6 667 effective tokens; floor 10 keeps small models
+    // from never summarizing, ceiling 500 prevents indefinite deferral on
+    // mega-context models.
     (3 * effective_limit / 20_000).clamp(10, 500)
 }
 
