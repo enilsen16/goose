@@ -1043,7 +1043,7 @@ pub fn create_request(
     };
     payload
         .as_object_mut()
-        .unwrap()
+        .ok_or_else(|| anyhow!("openai payload must be a JSON object"))?
         .insert(key.to_string(), json!(model_config.max_output_tokens()));
 
     if for_streaming {
