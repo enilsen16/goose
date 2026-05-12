@@ -394,11 +394,13 @@ fn current_epoch_millis() -> u64 {
         .as_millis() as u64
 }
 
+const DEFAULT_MAX_BACKGROUND_TASKS: usize = 5;
+
 /// Get maximum number of concurrent background tasks
 fn max_background_tasks() -> usize {
     Config::global()
         .get_param::<usize>("GOOSE_MAX_BACKGROUND_TASKS")
-        .unwrap_or(5)
+        .unwrap_or(DEFAULT_MAX_BACKGROUND_TASKS)
 }
 
 fn is_session_id(s: &str) -> bool {
@@ -544,22 +546,24 @@ impl SummonClient {
 
         Tool::new(
             "delegate",
-            "Delegate a task to a subagent that runs independently with its own context.\n\n\
-             Modes:\n\
-             1. Ad-hoc: Provide `instructions` for a custom task\n\
-             2. Source-based: Provide `source` name to run a subrecipe, recipe, or agent\n\
-             3. Combined: Pair a source with a task (e.g., source: \"deploy\", instructions: \"deploy to staging\")\n\n\
-             Effective Delegation:\n\
-             - Delegates know only instructions + source content\n\
-             - Delegates cannot coordinate. Same-file work = conflicts.\n\
-             - Parallel: async: true, then load(taskId) to wait and get results. Single: sync.\n\n\
-             Fan-out trigger: when you have 3 or more structurally-similar subtasks (same shape,\n\
-             different inputs — e.g. implement the same adapter for each of A, B, C), dispatch\n\
-             each with async: true instead of executing them serially. Hard cap: 5 concurrent\n\
-             (GOOSE_MAX_BACKGROUND_TASKS). Pattern: fan out → load(taskId) per delegate → synthesize.\n\n\
-             Research (read-only): parallelize freely - delegates explore and report back.\n\
-             Work (writes): partition files strictly - no two delegates touch the same file."
-                .to_string(),
+            format!(
+                "Delegate a task to a subagent that runs independently with its own context.\n\n\
+                 Modes:\n\
+                 1. Ad-hoc: Provide `instructions` for a custom task\n\
+                 2. Source-based: Provide `source` name to run a subrecipe, recipe, or agent\n\
+                 3. Combined: Pair a source with a task (e.g., source: \"deploy\", instructions: \"deploy to staging\")\n\n\
+                 Effective Delegation:\n\
+                 - Delegates know only instructions + source content\n\
+                 - Delegates cannot coordinate. Same-file work = conflicts.\n\
+                 - Parallel: async: true, then load(taskId) to wait and get results. Single: sync.\n\n\
+                 Fan-out trigger: when you have 3 or more structurally-similar subtasks (same shape,\n\
+                 different inputs — e.g. implement the same adapter for each of A, B, C), dispatch\n\
+                 each with async: true instead of executing them serially. Hard cap: {} concurrent\n\
+                 (GOOSE_MAX_BACKGROUND_TASKS). Pattern: fan out → load(taskId) per delegate → synthesize.\n\n\
+                 Research (read-only): parallelize freely - delegates explore and report back.\n\
+                 Work (writes): partition files strictly - no two delegates touch the same file.",
+                DEFAULT_MAX_BACKGROUND_TASKS
+            ),
             schema.as_object().unwrap().clone(),
         )
     }
