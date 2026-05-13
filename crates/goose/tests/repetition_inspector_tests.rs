@@ -1,47 +1,80 @@
 use goose::tool_inspection::{InspectionAction, ToolInspector};
 use goose::tool_monitor::RepetitionInspector;
 use rmcp::model::CallToolRequestParams;
-use rmcp::object;
 
-// This test targets RepetitionInspector::check_tool_call
-// It verifies that:
-// - consecutive identical tool calls are allowed up to max_repetitions times
-// - the (max_repetitions + 1)th identical call is denied (returns false)
-// - changing the parameters resets the repetition count and allows the call
-#[test]
-fn test_repetition_inspector_denies_after_exceeding_and_resets_on_param_change() {
-    // Allow at most 2 consecutive identical calls
-    let mut inspector = RepetitionInspector::new(Some(2));
-
-    // First identical call → allowed
-    let call_v1 = CallToolRequestParams::new("fetch_user").with_arguments(object!({"id": 123}));
-    assert!(inspector.check_tool_call(call_v1.clone()));
-
-    // Second identical call → still allowed (at limit)
-    assert!(inspector.check_tool_call(call_v1.clone()));
-
-    // Third identical call → should be denied (exceeds limit)
-    assert!(!inspector.check_tool_call(call_v1.clone()));
-
-    // Change parameters; this should reset the consecutive counter
-    let call_v2 = CallToolRequestParams::new("fetch_user").with_arguments(object!({"id": 456}));
-
-    assert!(inspector.check_tool_call(call_v2.clone()));
-
-    // Another identical call with new params → allowed (second in a row for this variant)
-    assert!(inspector.check_tool_call(call_v2.clone()));
-
-    // One more identical call with new params → denied again
-    assert!(!inspector.check_tool_call(call_v2));
-}
-
-fn make_tool_request(tool_name: &'static str) -> goose::conversation::message::ToolRequest {
+fn make_tool_request_with_args(
+    id: &str,
+    tool_name: &'static str,
+    args: serde_json::Value,
+) -> goose::conversation::message::ToolRequest {
     goose::conversation::message::ToolRequest {
-        id: format!("req_{}", tool_name),
-        tool_call: Ok(CallToolRequestParams::new(tool_name).with_arguments(object!({}))),
+        id: id.to_string(),
+        tool_call: Ok(CallToolRequestParams::new(tool_name)
+            .with_arguments(args.as_object().cloned().unwrap_or_default())),
         metadata: None,
         tool_meta: None,
     }
+}
+
+fn make_tool_request(tool_name: &'static str) -> goose::conversation::message::ToolRequest {
+    make_tool_request_with_args(
+        &format!("req_{}", tool_name),
+        tool_name,
+        serde_json::json!({}),
+    )
+}
+
+async fn run_inspect(
+    inspector: &RepetitionInspector,
+    id: &str,
+    tool_name: &'static str,
+    args: serde_json::Value,
+) -> Vec<goose::tool_inspection::InspectionResult> {
+    let req = make_tool_request_with_args(id, tool_name, args);
+    ToolInspector::inspect(
+        inspector,
+        "session",
+        &[req],
+        &[],
+        goose::config::GooseMode::Auto,
+    )
+    .await
+    .unwrap()
+}
+
+/// REP-001: consecutive identical tool calls are allowed up to max_repetitions times;
+/// the (max_repetitions + 1)th identical call is denied; changing parameters resets the streak.
+#[tokio::test]
+async fn test_repetition_inspector_denies_after_exceeding_and_resets_on_param_change() {
+    let inspector = RepetitionInspector::new(Some(2));
+    let v1 = serde_json::json!({"id": 123});
+    let v2 = serde_json::json!({"id": 456});
+
+    // First identical call → allowed
+    assert!(run_inspect(&inspector, "r1", "fetch_user", v1.clone())
+        .await
+        .is_empty());
+    // Second identical call → still allowed (at limit)
+    assert!(run_inspect(&inspector, "r2", "fetch_user", v1.clone())
+        .await
+        .is_empty());
+    // Third identical call → denied (exceeds limit)
+    let denied = run_inspect(&inspector, "r3", "fetch_user", v1).await;
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].finding_id.as_deref(), Some("REP-001"));
+
+    // Change parameters; consecutive counter resets, call is allowed
+    assert!(run_inspect(&inspector, "r4", "fetch_user", v2.clone())
+        .await
+        .is_empty());
+    // Another identical call with new params → allowed (second in a row)
+    assert!(run_inspect(&inspector, "r5", "fetch_user", v2.clone())
+        .await
+        .is_empty());
+    // One more identical call with new params → denied again
+    let denied2 = run_inspect(&inspector, "r6", "fetch_user", v2).await;
+    assert_eq!(denied2.len(), 1);
+    assert_eq!(denied2[0].finding_id.as_deref(), Some("REP-001"));
 }
 
 #[tokio::test]

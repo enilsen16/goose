@@ -5,7 +5,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::model::{CallToolRequestParams, Role};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub const FINDING_ID_REPEATED_CALLS: &str = "REP-001";
@@ -48,7 +47,6 @@ fn path_read_count_in_history(messages: &[Message], tool_name: &str, path: &str)
     count
 }
 
-// Helper struct for internal tracking
 #[derive(Debug, Clone)]
 struct InternalToolCall {
     name: String,
@@ -72,6 +70,12 @@ impl InternalToolCall {
 }
 
 #[derive(Debug)]
+struct RepetitionState {
+    last_call: Option<InternalToolCall>,
+    repeat_count: u32,
+}
+
+#[derive(Debug)]
 struct ErrorState {
     last_tool_name: Option<String>,
     last_error_text: Option<String>,
@@ -81,19 +85,48 @@ struct ErrorState {
 #[derive(Debug)]
 pub struct RepetitionInspector {
     max_repetitions: Option<u32>,
-    last_call: Option<InternalToolCall>,
-    repeat_count: u32,
-    call_counts: HashMap<String, u32>,
+    state: Mutex<RepetitionState>,
     error_state: Mutex<ErrorState>,
+}
+
+/// Check whether `call` is allowed given current state, and update state.
+/// Returns false if the call exceeds the repetition limit.
+fn check_and_update(
+    state: &mut RepetitionState,
+    call: &InternalToolCall,
+    max_repetitions: Option<u32>,
+) -> bool {
+    if max_repetitions.is_none() {
+        state.last_call = Some(call.clone());
+        state.repeat_count = 1;
+        return true;
+    }
+
+    if let Some(last) = &state.last_call {
+        if last.matches(call) {
+            state.repeat_count += 1;
+            if state.repeat_count > max_repetitions.unwrap() {
+                return false;
+            }
+        } else {
+            state.repeat_count = 1;
+        }
+    } else {
+        state.repeat_count = 1;
+    }
+
+    state.last_call = Some(call.clone());
+    true
 }
 
 impl RepetitionInspector {
     pub fn new(max_repetitions: Option<u32>) -> Self {
         Self {
             max_repetitions,
-            last_call: None,
-            repeat_count: 0,
-            call_counts: HashMap::new(),
+            state: Mutex::new(RepetitionState {
+                last_call: None,
+                repeat_count: 0,
+            }),
             error_state: Mutex::new(ErrorState {
                 last_tool_name: None,
                 last_error_text: None,
@@ -123,45 +156,14 @@ impl RepetitionInspector {
         state.consecutive_count = 0;
     }
 
-    pub fn check_tool_call(&mut self, tool_call: CallToolRequestParams) -> bool {
-        let internal_call = InternalToolCall::from_tool_call(&tool_call);
-        let total_calls = self
-            .call_counts
-            .entry(internal_call.name.clone())
-            .or_insert(0);
-        *total_calls += 1;
-
-        if self.max_repetitions.is_none() {
-            self.last_call = Some(internal_call);
-            self.repeat_count = 1;
-            return true;
-        }
-
-        if let Some(last) = &self.last_call {
-            if last.matches(&internal_call) {
-                self.repeat_count += 1;
-                if self.repeat_count > self.max_repetitions.unwrap() {
-                    return false;
-                }
-            } else {
-                self.repeat_count = 1;
-            }
-        } else {
-            self.repeat_count = 1;
-        }
-
-        self.last_call = Some(internal_call);
-        true
-    }
-
-    pub fn reset(&mut self) {
-        self.last_call = None;
-        self.repeat_count = 0;
-        self.call_counts.clear();
-        let mut state = self.error_state.lock().unwrap();
-        state.last_tool_name = None;
-        state.last_error_text = None;
-        state.consecutive_count = 0;
+    pub fn reset(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.last_call = None;
+        state.repeat_count = 0;
+        let mut error_state = self.error_state.lock().unwrap();
+        error_state.last_tool_name = None;
+        error_state.last_error_text = None;
+        error_state.consecutive_count = 0;
     }
 }
 
@@ -184,16 +186,16 @@ impl ToolInspector for RepetitionInspector {
     ) -> Result<Vec<InspectionResult>> {
         let mut results = Vec::new();
 
-        // Check call-repetition limits for each tool request
+        // Check call-repetition limits for each tool request, updating state as we go.
         for tool_request in tool_requests {
             if let Ok(tool_call) = &tool_request.tool_call {
-                // Create a temporary clone to check without modifying state
-                let mut temp_inspector = RepetitionInspector::new(self.max_repetitions);
-                temp_inspector.last_call = self.last_call.clone();
-                temp_inspector.repeat_count = self.repeat_count;
-                temp_inspector.call_counts = self.call_counts.clone();
-
-                if !temp_inspector.check_tool_call(tool_call.clone()) {
+                let internal_call = InternalToolCall::from_tool_call(tool_call);
+                let allowed = check_and_update(
+                    &mut self.state.lock().unwrap(),
+                    &internal_call,
+                    self.max_repetitions,
+                );
+                if !allowed {
                     results.push(InspectionResult {
                         tool_request_id: tool_request.id.clone(),
                         action: InspectionAction::Deny,
@@ -269,5 +271,85 @@ impl ToolInspector for RepetitionInspector {
         }
 
         Ok(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::CallToolRequestParams;
+    use serde_json::json;
+
+    fn make_tool_request(id: &str, name: &'static str, args: serde_json::Value) -> ToolRequest {
+        ToolRequest {
+            id: id.to_string(),
+            tool_call: Ok(CallToolRequestParams::new(name)
+                .with_arguments(args.as_object().cloned().unwrap_or_default())),
+            tool_meta: None,
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn rep001_fires_after_max_repetitions() {
+        let inspector = RepetitionInspector::new(Some(3));
+        let args = json!({"key": "value"});
+
+        for i in 0..3 {
+            let req = make_tool_request(&format!("id-{i}"), "my_tool", args.clone());
+            let results = inspector
+                .inspect("session", &[req], &[], GooseMode::Auto)
+                .await
+                .unwrap();
+            assert!(results.is_empty(), "call {i} should be allowed");
+        }
+
+        let req = make_tool_request("id-3", "my_tool", args.clone());
+        let results = inspector
+            .inspect("session", &[req], &[], GooseMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].finding_id.as_deref(),
+            Some(FINDING_ID_REPEATED_CALLS)
+        );
+        assert_eq!(results[0].action, InspectionAction::Deny);
+    }
+
+    #[tokio::test]
+    async fn rep001_resets_on_different_args() {
+        let inspector = RepetitionInspector::new(Some(2));
+
+        for i in 0..2 {
+            let req = make_tool_request(&format!("id-{i}"), "tool", json!({"k": "v1"}));
+            let results = inspector
+                .inspect("session", &[req], &[], GooseMode::Auto)
+                .await
+                .unwrap();
+            assert!(results.is_empty());
+        }
+
+        let req = make_tool_request("id-2", "tool", json!({"k": "v2"}));
+        let results = inspector
+            .inspect("session", &[req], &[], GooseMode::Auto)
+            .await
+            .unwrap();
+        assert!(results.is_empty(), "different args should reset streak");
+    }
+
+    #[tokio::test]
+    async fn rep001_disabled_when_max_is_none() {
+        let inspector = RepetitionInspector::new(None);
+        let args = json!({"k": "v"});
+
+        for i in 0..20 {
+            let req = make_tool_request(&format!("id-{i}"), "tool", args.clone());
+            let results = inspector
+                .inspect("session", &[req], &[], GooseMode::Auto)
+                .await
+                .unwrap();
+            assert!(results.is_empty(), "unlimited mode should never deny");
+        }
     }
 }

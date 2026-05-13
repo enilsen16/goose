@@ -55,6 +55,7 @@ use crate::session::{Session, SessionManager, SessionNameUpdate};
 use crate::tool_inspection::ToolInspectionManager;
 use crate::tool_monitor::{
     RepetitionInspector, FINDING_ID_REPEATED_CALLS, FINDING_ID_REPEATED_ERROR,
+    FINDING_ID_REPEATED_PATH,
 };
 use crate::utils::is_token_cancelled;
 use regex::Regex;
@@ -2104,6 +2105,25 @@ impl Agent {
                                                 "Note: {}. Try a different approach — check whether \
                                                  you are using the correct input values, a different \
                                                  tool, or a different ID field from earlier results.",
+                                                result.reason
+                                            );
+                                            let hint_msg = Message::user().with_text(hint);
+                                            yield AgentEvent::Message(hint_msg.clone());
+                                            messages_to_add.push(hint_msg);
+                                        }
+
+                                        // If a REP-003 deny fired, inject a path-specific hint
+                                        // directing the model to grep/rg instead of re-reading.
+                                        let rep003_finding = inspection_results.iter().find(|r| {
+                                            r.tool_request_id == request.id
+                                                && r.finding_id.as_deref()
+                                                    == Some(FINDING_ID_REPEATED_PATH)
+                                        });
+                                        if let Some(result) = rep003_finding {
+                                            let hint = format!(
+                                                "Note: {}. Use `rg` or `grep` to search for \
+                                                 specific symbols — do not read this file again \
+                                                 until you have written to it.",
                                                 result.reason
                                             );
                                             let hint_msg = Message::user().with_text(hint);
