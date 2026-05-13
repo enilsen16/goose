@@ -1,16 +1,52 @@
 use crate::config::GooseMode;
-use crate::conversation::message::{Message, ToolRequest};
+use crate::conversation::message::{Message, MessageContent, ToolRequest};
 use crate::tool_inspection::{InspectionAction, InspectionResult, ToolInspector};
 use anyhow::Result;
 use async_trait::async_trait;
-use rmcp::model::CallToolRequestParams;
+use rmcp::model::{CallToolRequestParams, Role};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub const FINDING_ID_REPEATED_CALLS: &str = "REP-001";
 pub const FINDING_ID_REPEATED_ERROR: &str = "REP-002";
+pub const FINDING_ID_REPEATED_PATH: &str = "REP-003";
 const MAX_CONSECUTIVE_ERROR_FINGERPRINTS: u32 = 3;
+const MAX_SAME_PATH_READS: u32 = 8;
+
+fn extract_path_arg(args: Option<&serde_json::Map<String, Value>>) -> Option<&str> {
+    args?.get("path")?.as_str()
+}
+
+/// Counts reads of `path` by `tool_name` since the most recent write or edit
+/// to that path, scanning newest-first for early termination.
+fn path_read_count_in_history(messages: &[Message], tool_name: &str, path: &str) -> u32 {
+    const WRITE_TOOLS: &[&str] = &["write", "edit"];
+    let mut count = 0u32;
+    'msg: for msg in messages.iter().rev() {
+        if msg.role != Role::Assistant {
+            continue;
+        }
+        for content in &msg.content {
+            let MessageContent::ToolRequest(tr) = content else {
+                continue;
+            };
+            let Ok(tc) = &tr.tool_call else { continue };
+            let Some(call_path) = extract_path_arg(tc.arguments.as_ref()) else {
+                continue;
+            };
+            if call_path != path {
+                continue;
+            }
+            if tc.name.as_ref() == tool_name {
+                count += 1;
+            } else if WRITE_TOOLS.contains(&tc.name.as_ref()) {
+                break 'msg;
+            }
+        }
+    }
+    count
+}
 
 // Helper struct for internal tracking
 #[derive(Debug, Clone)]
@@ -143,7 +179,7 @@ impl ToolInspector for RepetitionInspector {
         &self,
         _session_id: &str,
         tool_requests: &[ToolRequest],
-        _messages: &[Message],
+        messages: &[Message],
         _goose_mode: GooseMode,
     ) -> Result<Vec<InspectionResult>> {
         let mut results = Vec::new();
@@ -166,7 +202,7 @@ impl ToolInspector for RepetitionInspector {
                             tool_call.name
                         ),
                         confidence: 1.0,
-                        inspector_name: "repetition".to_string(),
+                        inspector_name: self.name().to_string(),
                         finding_id: Some(FINDING_ID_REPEATED_CALLS.to_string()),
                     });
                 }
@@ -192,7 +228,7 @@ impl ToolInspector for RepetitionInspector {
                                         tool_call.name, state.consecutive_count, error_text
                                     ),
                                     confidence: 1.0,
-                                    inspector_name: "repetition".to_string(),
+                                    inspector_name: self.name().to_string(),
                                     finding_id: Some(FINDING_ID_REPEATED_ERROR.to_string()),
                                 });
                                 denied = true;
@@ -203,6 +239,30 @@ impl ToolInspector for RepetitionInspector {
                     // intervening turn calling other tools doesn't silently clear the streak
                     if denied {
                         state.consecutive_count = 0;
+                    }
+                }
+            }
+        }
+
+        // Deny a read tool that has hit the same path too many times without
+        // writing to it — catches varying-offset read loops that exact-arg
+        // matching misses (e.g. reading config.rs at offset 0, 75, 175, ...).
+        for tool_request in tool_requests {
+            if let Ok(tool_call) = &tool_request.tool_call {
+                if let Some(path) = extract_path_arg(tool_call.arguments.as_ref()) {
+                    let count = path_read_count_in_history(messages, tool_call.name.as_ref(), path);
+                    if count >= MAX_SAME_PATH_READS {
+                        results.push(InspectionResult {
+                            tool_request_id: tool_request.id.clone(),
+                            action: InspectionAction::Deny,
+                            reason: format!(
+                                "Tool '{}' has read '{}' {} times without writing — try a different approach.",
+                                tool_call.name, path, count
+                            ),
+                            confidence: 1.0,
+                            inspector_name: self.name().to_string(),
+                            finding_id: Some(FINDING_ID_REPEATED_PATH.to_string()),
+                        });
                     }
                 }
             }
