@@ -176,6 +176,9 @@ struct ErrorState {
 #[derive(Debug)]
 pub struct RepetitionInspector {
     max_repetitions: Option<u32>,
+    /// Number of reads of the same path allowed before the next is denied.
+    /// With N=5, reads 1–5 pass; read 6 triggers REP-003 with all 5 priors
+    /// flagged for summarization. Configurable via `GOOSE_MAX_SAME_PATH_READS`.
     max_same_path_reads: u32,
     state: Mutex<RepetitionState>,
     error_state: Mutex<ErrorState>,

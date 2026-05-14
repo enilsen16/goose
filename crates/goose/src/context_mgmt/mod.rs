@@ -500,6 +500,63 @@ pub fn tool_ids_to_summarize(
         .collect()
 }
 
+// Generic structured output for any tool. Narrative summaries lose tool name
+// and argument verbatim text, so a future turn can't reason about what was
+// tried; the structured form anchors them.
+const DEFAULT_SUMMARY_TEMPLATE: &str = indoc! {r#"
+            Summarize the tool_request and tool_response below in the structured
+            form shown. Preserve tool name and arguments verbatim — do not paraphrase
+            them. Output exactly these lines, each starting with the field name and a colon:
+
+            tool: <tool name from tool_request, verbatim>
+            args: <arguments from tool_request as a single line, truncated to ~200 chars with "…" if longer>
+            status: success
+            result: <one short paragraph (≤300 chars) describing the response: key fields, counts, file paths, error text — whatever helps a future turn reason about what was learned>
+
+            Use `status: error` if the response indicates failure.
+            Do not narrate. Do not summarize the tool name. Do not omit fields.
+        "#};
+
+// Specialized template for `read`-family tools. Narrative summaries ("the
+// code defines a series of functions to resolve config") destroy navigation
+// — the agent then has to re-read to find symbol names and line numbers,
+// which is exactly the loop REP-003 is trying to catch. Preserve structure
+// instead.
+const CODE_READING_SUMMARY_TEMPLATE: &str = indoc! {r#"
+            Summarize the tool_request and tool_response below in the structured form shown.
+            The response is the contents of a source file. Preserve navigational structure
+            so the agent can find symbols later WITHOUT re-reading. Output exactly these
+            lines, each starting with the field name and a colon:
+
+            tool: <tool name from tool_request, verbatim>
+            args: <arguments from tool_request as a single line, truncated to ~200 chars with "…" if longer>
+            status: success
+            result: <up to ~500 chars. Preserve VERBATIM (signature only, no body):
+                - top-level `fn name(args) -> Type` declarations
+                - top-level `struct Name { ... }` / `enum Name { ... }` / `trait Name { ... }`
+                - `impl Trait for Type` blocks
+                - top-level `type X = ...` and `const X = ...`
+                - `use` / `import` statements
+              Include line numbers when the response shows them (cat -n style).
+              End with one short sentence (≤100 chars) summarizing what the file is for.
+              If the response is a directory listing, apply this budget per file.>
+
+            Use `status: error` if the response indicates failure.
+            Do not narrate. Do not summarize the tool name. Do not omit fields.
+        "#};
+
+/// Pick the summarization system prompt for a given tool. Code-reading tools
+/// get a structural-outline template that preserves symbol names and line
+/// numbers; everything else gets the generic narrative-with-structured-frame
+/// template. `text_editor` is intentionally absent — it lives in
+/// [`NEVER_SUMMARIZE_TOOLS`] and never reaches this dispatch.
+fn select_summary_system_prompt(tool_name: &str) -> &'static str {
+    match tool_name {
+        "read" | "developer__read" => CODE_READING_SUMMARY_TEMPLATE,
+        _ => DEFAULT_SUMMARY_TEMPLATE,
+    }
+}
+
 pub async fn summarize_tool_call(
     provider: &dyn Provider,
     session_id: &str,
@@ -508,11 +565,19 @@ pub async fn summarize_tool_call(
 ) -> Result<Message> {
     let messages = conversation.messages();
 
+    let mut tool_name: Option<String> = None;
     let matching_messages: Vec<&Message> = messages
         .iter()
         .filter(|m| {
             m.content.iter().any(|c| match c {
-                MessageContent::ToolRequest(req) => req.id == tool_id,
+                MessageContent::ToolRequest(req) if req.id == tool_id => {
+                    if tool_name.is_none() {
+                        if let Ok(call) = &req.tool_call {
+                            tool_name = Some(call.name.to_string());
+                        }
+                    }
+                    true
+                }
                 MessageContent::ToolResponse(resp) => resp.id == tool_id,
                 _ => false,
             })
@@ -535,23 +600,7 @@ pub async fn summarize_tool_call(
     let user_message = Message::user().with_text(formatted);
     let summarization_request = vec![user_message];
 
-    // Structured output preserves the tool name and arguments verbatim — narrative
-    // summaries like "A call to github was made..." were stripping the actual
-    // command and parameters, leaving the agent unable to reason about what was
-    // tried. The model still summarizes the response body (which can be huge).
-    let system_prompt = indoc! {r#"
-                Summarize the tool_request and tool_response below in the structured
-                form shown. Preserve tool name and arguments verbatim — do not paraphrase
-                them. Output exactly these lines, each starting with the field name and a colon:
-
-                tool: <tool name from tool_request, verbatim>
-                args: <arguments from tool_request as a single line, truncated to ~200 chars with "…" if longer>
-                status: success
-                result: <one short paragraph (≤300 chars) describing the response: key fields, counts, file paths, error text — whatever helps a future turn reason about what was learned>
-
-                Use `status: error` if the response indicates failure.
-                Do not narrate. Do not summarize the tool name. Do not omit fields.
-            "#};
+    let system_prompt = select_summary_system_prompt(tool_name.as_deref().unwrap_or(""));
 
     let (mut response, _) = provider
         .complete_fast(session_id, system_prompt, &summarization_request, &[])
@@ -656,6 +705,43 @@ mod tests {
     };
     use async_trait::async_trait;
     use rmcp::model::{AnnotateAble, CallToolRequestParams, RawContent, Tool};
+
+    #[test]
+    fn select_summary_system_prompt_dispatches_read_to_code_template() {
+        assert_eq!(
+            select_summary_system_prompt("read"),
+            CODE_READING_SUMMARY_TEMPLATE
+        );
+        assert_eq!(
+            select_summary_system_prompt("developer__read"),
+            CODE_READING_SUMMARY_TEMPLATE
+        );
+    }
+
+    #[test]
+    fn select_summary_system_prompt_falls_back_to_default_for_other_tools() {
+        for tool in [
+            "shell",
+            "developer__shell",
+            "github__create_pr",
+            "execute_typescript",
+            "",
+            "unknown_tool",
+        ] {
+            assert_eq!(
+                select_summary_system_prompt(tool),
+                DEFAULT_SUMMARY_TEMPLATE,
+                "expected DEFAULT_SUMMARY_TEMPLATE for tool {tool:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn summary_templates_differ() {
+        // Sanity: if the two templates accidentally become equal, the dispatch
+        // becomes a no-op. Catch that regression.
+        assert_ne!(CODE_READING_SUMMARY_TEMPLATE, DEFAULT_SUMMARY_TEMPLATE);
+    }
 
     fn create_tool_pair(
         call_id: &str,
