@@ -19,7 +19,7 @@ use std::sync::{Arc, LazyLock};
 use tracing::{info, warn};
 use utoipa::ToSchema;
 
-pub const CURRENT_SCHEMA_VERSION: i32 = 14;
+pub const CURRENT_SCHEMA_VERSION: i32 = 15;
 pub const SESSIONS_FOLDER: &str = "sessions";
 pub const DB_NAME: &str = "sessions.db";
 
@@ -1192,6 +1192,23 @@ impl SessionStorage {
                 let updated = backfill_session_project_ids(tx, &pairs).await?;
                 if updated > 0 {
                     info!("Backfilled project_id on {updated} legacy session(s)");
+                }
+            }
+            15 => {
+                // Dev users who ran the pre-rebase v13 (project_id backfill) reached
+                // schema_version 14 without ever applying the upstream v13 that adds
+                // accumulated_cost — the loop jumped from 12→14 and skipped the
+                // column add. Idempotently re-check here so those DBs get repaired.
+                let has_accumulated_cost = sqlx::query_scalar::<_, i32>(
+                    "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'accumulated_cost'",
+                )
+                .fetch_one(&mut **tx)
+                .await?
+                    > 0;
+                if !has_accumulated_cost {
+                    sqlx::query("ALTER TABLE sessions ADD COLUMN accumulated_cost REAL")
+                        .execute(&mut **tx)
+                        .await?;
                 }
             }
             _ => {
