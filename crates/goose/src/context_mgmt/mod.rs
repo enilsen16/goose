@@ -564,6 +564,58 @@ pub async fn summarize_tool_call(
     Ok(response.with_generated_id())
 }
 
+/// Spawn a summarization task for a specific list of tool_request ids,
+/// bypassing the normal cutoff/eligibility checks. Used by REP-triggered
+/// targeted summarization where the inspector has already identified
+/// duplicate calls worth collapsing.
+///
+/// Honors the same operator gates as [`maybe_summarize_tool_pairs`]:
+/// summarization-disabled and provider-managed-context both short-circuit.
+/// Also skips ids whose corresponding messages are already agent-invisible
+/// (i.e. previously summarized) so we don't waste a model call.
+pub fn spawn_summarize_specific_tool_ids(
+    provider: Arc<dyn Provider>,
+    session_id: String,
+    conversation: Conversation,
+    ids: Vec<String>,
+) -> Option<JoinHandle<Vec<(Message, String)>>> {
+    if !tool_pair_summarization_enabled() || provider.manages_own_context() {
+        return None;
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    let visible_ids: Vec<String> = ids
+        .into_iter()
+        .filter(|id| {
+            conversation.messages().iter().any(|m| {
+                m.is_agent_visible()
+                    && m.content.iter().any(|c| match c {
+                        MessageContent::ToolRequest(req) => &req.id == id,
+                        MessageContent::ToolResponse(resp) => &resp.id == id,
+                        _ => false,
+                    })
+            })
+        })
+        .collect();
+    if visible_ids.is_empty() {
+        return None;
+    }
+    Some(tokio::spawn(async move {
+        let mut results = Vec::new();
+        for tool_id in visible_ids {
+            match summarize_tool_call(provider.as_ref(), &session_id, &conversation, &tool_id).await
+            {
+                Ok(summary) => results.push((summary, tool_id)),
+                Err(e) => {
+                    warn!("Failed to summarize REP-flagged tool pair {tool_id}: {e}");
+                }
+            }
+        }
+        results
+    }))
+}
+
 pub fn maybe_summarize_tool_pairs(
     provider: Arc<dyn Provider>,
     session_id: String,

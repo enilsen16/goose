@@ -17,6 +17,25 @@ pub struct InspectionResult {
     pub confidence: f32,
     pub inspector_name: String,
     pub finding_id: Option<String>,
+    /// For loop-detection findings (REP-*), the tool_request ids of the
+    /// strictly-prior duplicate calls that triggered the finding. The
+    /// most-recent matching call is intentionally *not* included so it stays
+    /// verbatim in the conversation. Empty for non-loop findings.
+    pub prior_tool_ids: Vec<String>,
+}
+
+impl Default for InspectionResult {
+    fn default() -> Self {
+        Self {
+            tool_request_id: String::new(),
+            action: InspectionAction::Allow,
+            reason: String::new(),
+            confidence: 0.0,
+            inspector_name: String::new(),
+            finding_id: None,
+            prior_tool_ids: Vec::new(),
+        }
+    }
 }
 
 /// Action to take based on inspection result
@@ -138,9 +157,9 @@ impl ToolInspectionManager {
             .and_then(|i| i.as_any().downcast_ref::<RepetitionInspector>())
     }
 
-    pub fn record_tool_error(&self, tool_name: &str, error_text: &str) {
+    pub fn record_tool_error(&self, request_id: &str, tool_name: &str, error_text: &str) {
         if let Some(inspector) = self.get_repetition_inspector() {
-            inspector.record_error(tool_name, error_text);
+            inspector.record_error(request_id, tool_name, error_text);
         }
     }
 
@@ -310,6 +329,7 @@ mod tests {
             confidence: 0.9,
             inspector_name: "test_inspector".to_string(),
             finding_id: Some("TEST-001".to_string()),
+            prior_tool_ids: Vec::new(),
         }];
 
         let updated_result =

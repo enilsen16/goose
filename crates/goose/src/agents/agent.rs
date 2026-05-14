@@ -1801,6 +1801,7 @@ impl Agent {
                 let mut tools_updated = false;
                 let mut did_recovery_compact_this_iteration = false;
                 let mut exit_chat = false;
+                let mut rep_summarization_task: Option<tokio::task::JoinHandle<Vec<(Message, String)>>> = None;
 
                 // Track whether this provider turn has already emitted visible
                 // thinking so a later tool-call chunk can suppress replayed
@@ -2013,11 +2014,11 @@ impl Agent {
                                                                     .unwrap_or("unknown");
                                                                 match &output {
                                                                     Err(e) => {
-                                                                        self.tool_inspection_manager.record_tool_error(tool_name, &e.to_string());
+                                                                        self.tool_inspection_manager.record_tool_error(&request_id, tool_name, &e.to_string());
                                                                     }
                                                                     Ok(r) if r.is_error == Some(true) => {
                                                                         let error_text = build_tool_error_fingerprint(r);
-                                                                        self.tool_inspection_manager.record_tool_error(tool_name, &error_text);
+                                                                        self.tool_inspection_manager.record_tool_error(&request_id, tool_name, &error_text);
                                                                     }
                                                                     Ok(_) => {
                                                                         self.tool_inspection_manager.record_tool_success();
@@ -2143,6 +2144,29 @@ impl Agent {
                                             let hint_msg = Message::user().with_text(hint);
                                             yield AgentEvent::Message(hint_msg.clone());
                                             messages_to_add.push(hint_msg);
+                                        }
+
+                                        // Spawn targeted summarization for any REP finding that
+                                        // surfaced prior duplicate ids. Honors the same operator
+                                        // gates as periodic summarization and runs in parallel
+                                        // with subsequent tool execution; joined at end of turn.
+                                        if rep_summarization_task.is_none() {
+                                            let mut prior_ids: Vec<String> = inspection_results
+                                                .iter()
+                                                .filter(|r| r.tool_request_id == request.id)
+                                                .flat_map(|r| r.prior_tool_ids.clone())
+                                                .collect();
+                                            prior_ids.sort();
+                                            prior_ids.dedup();
+                                            if !prior_ids.is_empty() {
+                                                rep_summarization_task =
+                                                    crate::context_mgmt::spawn_summarize_specific_tool_ids(
+                                                        self.provider().await?,
+                                                        session_config.id.clone(),
+                                                        conversation.clone(),
+                                                        prior_ids,
+                                                    );
+                                            }
                                         }
                                     } else {
                                         error!(
@@ -2381,6 +2405,9 @@ impl Agent {
                     if let Some(ref task) = tool_pair_summarization_task {
                         task.abort();
                     }
+                    if let Some(ref task) = rep_summarization_task {
+                        task.abort();
+                    }
                 }
 
                 if let Some(task) = tool_pair_summarization_task {
@@ -2409,6 +2436,36 @@ impl Agent {
                             } else {
                                 warn!("Expected a tool request/reply pair, but found {} matching messages",
                                     matching_ids.len());
+                            }
+                        }
+                    }
+                }
+
+                if let Some(task) = rep_summarization_task {
+                    if let Ok(summaries) = task.await {
+                        for (summary_msg, tool_id) in summaries {
+                            let matching_ids: Vec<String> = conversation.messages()
+                                .iter()
+                                .filter(|msg| {
+                                    msg.id.is_some() && msg.content.iter().any(|c| match c {
+                                        MessageContent::ToolRequest(req) => req.id == tool_id,
+                                        MessageContent::ToolResponse(resp) => resp.id == tool_id,
+                                        _ => false,
+                                    })
+                                })
+                                .filter_map(|msg| msg.id.clone())
+                                .collect();
+
+                            if matching_ids.len() == 2 {
+                                for id in &matching_ids {
+                                    SessionManager::update_message_metadata(&session_config.id, id, |metadata| {
+                                        metadata.with_agent_invisible()
+                                    }).await?;
+                                }
+                                session_manager.add_message(&session_config.id, &summary_msg).await?;
+                            } else {
+                                warn!("REP-triggered summary expected a tool request/reply pair, but found {} matching messages for id {}",
+                                    matching_ids.len(), tool_id);
                             }
                         }
                     }

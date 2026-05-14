@@ -81,7 +81,7 @@ async fn test_repetition_inspector_denies_after_exceeding_and_resets_on_param_ch
 async fn test_error_pattern_fires_after_threshold() {
     let inspector = RepetitionInspector::new(None, None);
     for _ in 0..3 {
-        inspector.record_error("my_tool", "404 Not Found");
+        inspector.record_error("req-err", "my_tool", "404 Not Found");
     }
     let requests = vec![make_tool_request("my_tool")];
     let results: Vec<_> = ToolInspector::inspect(
@@ -102,7 +102,7 @@ async fn test_error_pattern_fires_after_threshold() {
 async fn test_error_pattern_does_not_fire_before_threshold() {
     let inspector = RepetitionInspector::new(None, None);
     for _ in 0..2 {
-        inspector.record_error("my_tool", "404 Not Found");
+        inspector.record_error("req-err", "my_tool", "404 Not Found");
     }
     let requests = vec![make_tool_request("my_tool")];
     let results: Vec<_> = ToolInspector::inspect(
@@ -122,10 +122,10 @@ async fn test_error_pattern_does_not_fire_before_threshold() {
 #[tokio::test]
 async fn test_error_pattern_resets_on_success() {
     let inspector = RepetitionInspector::new(None, None);
-    inspector.record_error("my_tool", "404 Not Found");
-    inspector.record_error("my_tool", "404 Not Found");
+    inspector.record_error("req-err", "my_tool", "404 Not Found");
+    inspector.record_error("req-err", "my_tool", "404 Not Found");
     inspector.record_success();
-    inspector.record_error("my_tool", "404 Not Found");
+    inspector.record_error("req-err", "my_tool", "404 Not Found");
     let requests = vec![make_tool_request("my_tool")];
     let results: Vec<_> = ToolInspector::inspect(
         &inspector,
@@ -145,7 +145,7 @@ async fn test_error_pattern_resets_on_success() {
 async fn test_error_pattern_streak_not_cleared_by_unrelated_tool() {
     let inspector = RepetitionInspector::new(None, None);
     for _ in 0..3 {
-        inspector.record_error("tool_a", "timeout");
+        inspector.record_error("req-err", "tool_a", "timeout");
     }
     // Calling an unrelated tool must not reset tool_a's streak
     let unrelated = vec![make_tool_request("tool_b")];
@@ -178,7 +178,7 @@ async fn test_error_pattern_streak_not_cleared_by_unrelated_tool() {
 async fn test_error_pattern_does_not_cross_tool_names() {
     let inspector = RepetitionInspector::new(None, None);
     for _ in 0..3 {
-        inspector.record_error("tool_a", "same error");
+        inspector.record_error("req-err", "tool_a", "same error");
     }
     let requests = vec![make_tool_request("tool_b")];
     let results: Vec<_> = ToolInspector::inspect(
