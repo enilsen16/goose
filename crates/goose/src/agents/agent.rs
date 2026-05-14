@@ -1574,8 +1574,10 @@ impl Agent {
 
         let conversation_to_compact = conversation.clone();
 
+        let stall_check_text = message_text.clone();
+
         Ok(Box::pin(async_stream::try_stream! {
-            let final_conversation = if !needs_auto_compact {
+            let mut final_conversation = if !needs_auto_compact {
                 conversation
             } else {
                 let config = Config::global();
@@ -1636,6 +1638,13 @@ impl Agent {
                     }
                 }
             };
+
+            if super::stall_detection::should_inject_stall_hint(&stall_check_text, final_conversation.messages()) {
+                let hint = Message::user().with_text(super::stall_detection::STALL_HINT);
+                session_manager.add_message(&session_config.id, &hint).await?;
+                final_conversation.push(hint.clone());
+                yield AgentEvent::Message(hint);
+            }
 
             let mut reply_stream = self.reply_internal(final_conversation, session_config, session, cancel_token).await?;
             while let Some(event) = reply_stream.next().await {
