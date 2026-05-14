@@ -927,6 +927,20 @@ impl Message {
             .join("\n")
     }
 
+    /// Concatenated text of content visible to the user — drops anything
+    /// annotated with `audience: ["assistant"]` such as the active-working-context
+    /// block prepended to user messages. Use this when reasoning about what the
+    /// user actually typed, not as_concat_text which includes system-injected
+    /// context tags.
+    pub fn user_visible_text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|c| c.filter_for_audience(Role::User))
+            .filter_map(|c| c.as_text().map(String::from))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Check if the message is a tool call
     pub fn is_tool_call(&self) -> bool {
         self.content
@@ -1106,6 +1120,36 @@ mod tests {
         let clean_text = "Hello world 世界 🌍";
         let message = Message::user().with_text(clean_text);
         assert_eq!(message.as_concat_text(), clean_text);
+    }
+
+    #[test]
+    fn test_user_visible_text_drops_assistant_audience_content() {
+        use rmcp::model::{AnnotateAble, Annotations, RawTextContent, Role};
+
+        // Simulate what goose2 sends: a context block annotated for the
+        // assistant audience followed by the user's actual text.
+        let mut annotations = Annotations::default();
+        annotations.audience = Some(vec![Role::Assistant]);
+        let context = RawTextContent {
+            text: "<active-working-context>\nbranch: main\n</active-working-context>".to_string(),
+            meta: None,
+        }
+        .annotate(annotations);
+
+        let mut message = Message::user();
+        message.content.push(MessageContent::Text(context));
+        let message = message.with_text("continue");
+
+        // as_concat_text still includes both — that's its documented behavior.
+        assert!(message.as_concat_text().contains("active-working-context"));
+        // user_visible_text drops the assistant-only context block.
+        assert_eq!(message.user_visible_text(), "continue");
+    }
+
+    #[test]
+    fn test_user_visible_text_keeps_unannotated_content() {
+        let message = Message::user().with_text("just continue");
+        assert_eq!(message.user_visible_text(), "just continue");
     }
 
     #[test]

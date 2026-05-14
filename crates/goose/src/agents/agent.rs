@@ -1631,7 +1631,9 @@ impl Agent {
 
         let conversation_to_compact = conversation.clone();
 
-        let stall_check_text = message_text.clone();
+        // Use user-visible text so the active-working-context block prepended to
+        // every user message doesn't drown out short prompts like "continue".
+        let stall_check_text = user_message.user_visible_text();
 
         Ok(Box::pin(async_stream::try_stream! {
             let mut final_conversation = if !needs_auto_compact {
