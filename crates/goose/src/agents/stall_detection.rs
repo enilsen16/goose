@@ -1,4 +1,5 @@
 use crate::conversation::message::{Message, MessageContent};
+use crate::tool_monitor::STATE_CHANGE_TOOLS;
 use rmcp::model::Role;
 
 pub const STALL_HINT: &str = "Note: No forward progress since your last response — \
@@ -6,16 +7,7 @@ no file write or edit has happened since the previous user turn. Before continui
 summarize what is blocking you, the design choice you are facing, or what you need \
 from me, then proceed.";
 
-const STATE_CHANGE_TOOLS: &[&str] = &[
-    "write",
-    "edit",
-    "text_editor",
-    "todo_write",
-    "developer__write",
-    "developer__edit",
-    "developer__text_editor",
-    "developer__todo_write",
-];
+const STALL_HINT_PREFIX: &str = "Note: No forward progress";
 
 pub fn is_bare_nudge(text: &str) -> bool {
     let trimmed = text
@@ -25,7 +17,7 @@ pub fn is_bare_nudge(text: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         trimmed.as_str(),
-        "continue" | "yes" | "y" | "ok" | "okay" | "do it" | "go" | "proceed" | "next" | ""
+        "continue" | "yes" | "y" | "ok" | "okay" | "do it" | "go" | "proceed" | "next"
     )
 }
 
@@ -63,7 +55,6 @@ pub fn no_state_change_since_prior_user(messages: &[Message]) -> bool {
 /// begins with the stall-hint prefix. Used to avoid firing the hint twice
 /// in a row when the user types another bare nudge.
 pub fn previous_user_message_is_stall_hint(messages: &[Message]) -> bool {
-    let prefix = stall_hint_prefix();
     let mut user_count = 0u32;
     for msg in messages.iter().rev() {
         if msg.role != Role::User {
@@ -84,14 +75,10 @@ pub fn previous_user_message_is_stall_hint(messages: &[Message]) -> bool {
         }
         user_count += 1;
         if user_count == 2 {
-            return text_for_msg.unwrap().starts_with(prefix);
+            return text_for_msg.unwrap().starts_with(STALL_HINT_PREFIX);
         }
     }
     false
-}
-
-fn stall_hint_prefix() -> &'static str {
-    "Note: No forward progress"
 }
 
 /// Returns true if the current user message is a bare nudge, no state-change
@@ -139,12 +126,16 @@ mod tests {
             "go",
             "proceed",
             "next",
-            ".",
-            "",
             "  yes  ",
         ] {
             assert!(is_bare_nudge(t), "should treat {t:?} as bare nudge");
         }
+    }
+
+    #[test]
+    fn bare_nudge_rejects_empty_input() {
+        assert!(!is_bare_nudge(""));
+        assert!(!is_bare_nudge("   "));
     }
 
     #[test]

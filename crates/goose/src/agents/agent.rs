@@ -286,6 +286,63 @@ fn char_floor(s: &str, max_bytes: usize) -> usize {
     end
 }
 
+/// Mark each tool_request/response pair from `summaries` agent-invisible and
+/// persist the structured summary in its place. Builds a single tool-id →
+/// message-id index up front so a session with many summaries doesn't re-scan
+/// the whole conversation per id. `log_label` distinguishes the source in
+/// warn-level diagnostics when the expected (request, response) pair is
+/// missing from history.
+async fn apply_tool_pair_summaries(
+    session_manager: &SessionManager,
+    session_id: &str,
+    conversation: &Conversation,
+    summaries: Vec<(Message, String)>,
+    log_label: &str,
+) -> Result<()> {
+    let mut id_index: HashMap<&str, Vec<&str>> = HashMap::new();
+    for msg in conversation.messages() {
+        let Some(message_id) = msg.id.as_deref() else {
+            continue;
+        };
+        for c in &msg.content {
+            let tool_id = match c {
+                MessageContent::ToolRequest(req) => Some(req.id.as_str()),
+                MessageContent::ToolResponse(resp) => Some(resp.id.as_str()),
+                _ => None,
+            };
+            if let Some(tool_id) = tool_id {
+                id_index.entry(tool_id).or_default().push(message_id);
+            }
+        }
+    }
+
+    for (summary_msg, tool_id) in summaries {
+        let matching_ids = id_index
+            .get(tool_id.as_str())
+            .map(|v| v.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if matching_ids.len() == 2 {
+            for id in &matching_ids {
+                SessionManager::update_message_metadata(session_id, id, |metadata| {
+                    metadata.with_agent_invisible()
+                })
+                .await?;
+            }
+            session_manager
+                .add_message(session_id, &summary_msg)
+                .await?;
+        } else {
+            warn!(
+                "{} expected a tool request/reply pair, but found {} matching messages for id {}",
+                log_label,
+                matching_ids.len(),
+                tool_id
+            );
+        }
+    }
+    Ok(())
+}
+
 // tool_stream combines a stream of ServerNotifications with a future representing the
 // final result of the tool call. MCP notifications are not request-scoped, but
 // this lets us capture all notifications emitted during the tool call for
@@ -2413,61 +2470,25 @@ impl Agent {
                 if let Some(task) = tool_pair_summarization_task {
                     tool_pair_summarization_done = true;
                     if let Ok(summaries) = task.await {
-                        for (summary_msg, tool_id) in summaries {
-                            let matching_ids: Vec<String> = conversation.messages()
-                                .iter()
-                                .filter(|msg| {
-                                    msg.id.is_some() && msg.content.iter().any(|c| match c {
-                                        MessageContent::ToolRequest(req) => req.id == tool_id,
-                                        MessageContent::ToolResponse(resp) => resp.id == tool_id,
-                                        _ => false,
-                                    })
-                                })
-                                .filter_map(|msg| msg.id.clone())
-                                .collect();
-
-                            if matching_ids.len() == 2 {
-                                for id in &matching_ids {
-                                    SessionManager::update_message_metadata(&session_config.id, id, |metadata| {
-                                        metadata.with_agent_invisible()
-                                    }).await?;
-                                }
-                                session_manager.add_message(&session_config.id, &summary_msg).await?;
-                            } else {
-                                warn!("Expected a tool request/reply pair, but found {} matching messages",
-                                    matching_ids.len());
-                            }
-                        }
+                        apply_tool_pair_summaries(
+                            &session_manager,
+                            &session_config.id,
+                            &conversation,
+                            summaries,
+                            "tool-pair summary",
+                        ).await?;
                     }
                 }
 
                 if let Some(task) = rep_summarization_task {
                     if let Ok(summaries) = task.await {
-                        for (summary_msg, tool_id) in summaries {
-                            let matching_ids: Vec<String> = conversation.messages()
-                                .iter()
-                                .filter(|msg| {
-                                    msg.id.is_some() && msg.content.iter().any(|c| match c {
-                                        MessageContent::ToolRequest(req) => req.id == tool_id,
-                                        MessageContent::ToolResponse(resp) => resp.id == tool_id,
-                                        _ => false,
-                                    })
-                                })
-                                .filter_map(|msg| msg.id.clone())
-                                .collect();
-
-                            if matching_ids.len() == 2 {
-                                for id in &matching_ids {
-                                    SessionManager::update_message_metadata(&session_config.id, id, |metadata| {
-                                        metadata.with_agent_invisible()
-                                    }).await?;
-                                }
-                                session_manager.add_message(&session_config.id, &summary_msg).await?;
-                            } else {
-                                warn!("REP-triggered summary expected a tool request/reply pair, but found {} matching messages for id {}",
-                                    matching_ids.len(), tool_id);
-                            }
-                        }
+                        apply_tool_pair_summaries(
+                            &session_manager,
+                            &session_config.id,
+                            &conversation,
+                            summaries,
+                            "REP-triggered summary",
+                        ).await?;
                     }
                 }
 

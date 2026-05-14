@@ -51,35 +51,31 @@ fn extract_path_arg(args: Option<&serde_json::Map<String, Value>>) -> Option<&st
     args?.get("path")?.as_str()
 }
 
-const WRITE_TOOLS: &[&str] = &["write", "edit"];
+/// Tools whose successful invocation represents state change — used as REP-003
+/// reset points (a same-path write between reads breaks the loop) and as the
+/// "is the agent making progress" signal in goose2's stall indicator. Includes
+/// both bare names and `developer__`-prefixed forms because tool catalogs use
+/// either form depending on extension wiring.
+pub const STATE_CHANGE_TOOLS: &[&str] = &[
+    "write",
+    "edit",
+    "text_editor",
+    "todo_write",
+    "developer__write",
+    "developer__edit",
+    "developer__text_editor",
+    "developer__todo_write",
+];
 
-/// Counts reads of `path` by `tool_name` since the most recent write or edit
-/// to that path, scanning newest-first for early termination.
-fn path_read_count_in_history(messages: &[Message], tool_name: &str, path: &str) -> u32 {
-    let mut count = 0u32;
-    'msg: for msg in messages.iter().rev() {
-        if msg.role != Role::Assistant {
-            continue;
-        }
-        for content in &msg.content {
-            let MessageContent::ToolRequest(tr) = content else {
-                continue;
-            };
-            let Ok(tc) = &tr.tool_call else { continue };
-            let Some(call_path) = extract_path_arg(tc.arguments.as_ref()) else {
-                continue;
-            };
-            if call_path != path {
-                continue;
-            }
-            if tc.name.as_ref() == tool_name {
-                count += 1;
-            } else if WRITE_TOOLS.contains(&tc.name.as_ref()) {
-                break 'msg;
-            }
-        }
+/// Drop the most-recent entry of a newest-first-ordered id list. The newest
+/// duplicate is intentionally kept verbatim in the conversation so the model
+/// still has the freshest evidence to reason about; only strictly-prior
+/// duplicates get fed to summarization.
+fn drop_newest(mut ids: Vec<String>) -> Vec<String> {
+    if !ids.is_empty() {
+        ids.remove(0);
     }
-    count
+    ids
 }
 
 /// Walks back through assistant messages collecting tool_request ids that
@@ -108,8 +104,9 @@ fn prior_matching_call_ids(messages: &[Message], reference: &InternalToolCall) -
 }
 
 /// Walks back through assistant messages collecting tool_request ids for
-/// reads of `path` by `tool_name`, stopping at the first write/edit to the
-/// same path. Returned ids are newest-first.
+/// reads of `path` by `tool_name`, stopping at the first state-change tool
+/// targeting the same path. Returned ids are newest-first; the count is
+/// derivable as `.len() as u32`.
 fn prior_path_read_ids(messages: &[Message], tool_name: &str, path: &str) -> Vec<String> {
     let mut ids = Vec::new();
     'msg: for msg in messages.iter().rev() {
@@ -129,7 +126,7 @@ fn prior_path_read_ids(messages: &[Message], tool_name: &str, path: &str) -> Vec
             }
             if tc.name.as_ref() == tool_name {
                 ids.push(tr.id.clone());
-            } else if WRITE_TOOLS.contains(&tc.name.as_ref()) {
+            } else if STATE_CHANGE_TOOLS.contains(&tc.name.as_ref()) {
                 break 'msg;
             }
         }
@@ -297,13 +294,7 @@ impl ToolInspector for RepetitionInspector {
                     self.max_repetitions,
                 );
                 if !allowed {
-                    // Collect prior identical tool_request ids from history,
-                    // then drop the most-recent so it stays verbatim and only
-                    // the older duplicates get summarized.
-                    let mut prior_ids = prior_matching_call_ids(messages, &internal_call);
-                    if !prior_ids.is_empty() {
-                        prior_ids.remove(0);
-                    }
+                    let prior_ids = drop_newest(prior_matching_call_ids(messages, &internal_call));
                     results.push(InspectionResult {
                         tool_request_id: tool_request.id.clone(),
                         action: InspectionAction::Deny,
@@ -327,13 +318,11 @@ impl ToolInspector for RepetitionInspector {
             if state.consecutive_count >= MAX_CONSECUTIVE_ERROR_FINGERPRINTS {
                 if let Some(ref last_tool) = state.last_tool_name {
                     let error_text = state.last_error_text.as_deref().unwrap_or("");
-                    // Strictly-prior failing call ids — drop the newest so it
-                    // stays verbatim in the conversation.
-                    let prior_ids: Vec<String> = if state.streak_request_ids.len() > 1 {
-                        state.streak_request_ids[..state.streak_request_ids.len() - 1].to_vec()
-                    } else {
-                        Vec::new()
-                    };
+                    let prior_ids = state
+                        .streak_request_ids
+                        .split_last()
+                        .map(|(_, rest)| rest.to_vec())
+                        .unwrap_or_default();
                     let mut denied = false;
                     for tool_request in tool_requests {
                         if let Ok(tool_call) = &tool_request.tool_call {
@@ -370,14 +359,9 @@ impl ToolInspector for RepetitionInspector {
         for tool_request in tool_requests {
             if let Ok(tool_call) = &tool_request.tool_call {
                 if let Some(path) = extract_path_arg(tool_call.arguments.as_ref()) {
-                    let count = path_read_count_in_history(messages, tool_call.name.as_ref(), path);
+                    let read_ids = prior_path_read_ids(messages, tool_call.name.as_ref(), path);
+                    let count = read_ids.len() as u32;
                     if count >= self.max_same_path_reads {
-                        // Collect prior read ids, drop the newest so it stays verbatim.
-                        let mut prior_ids =
-                            prior_path_read_ids(messages, tool_call.name.as_ref(), path);
-                        if !prior_ids.is_empty() {
-                            prior_ids.remove(0);
-                        }
                         results.push(InspectionResult {
                             tool_request_id: tool_request.id.clone(),
                             action: InspectionAction::Deny,
@@ -388,7 +372,7 @@ impl ToolInspector for RepetitionInspector {
                             confidence: 1.0,
                             inspector_name: self.name().to_string(),
                             finding_id: Some(FINDING_ID_REPEATED_PATH.to_string()),
-                            prior_tool_ids: prior_ids,
+                            prior_tool_ids: drop_newest(read_ids),
                         });
                     }
                 }
