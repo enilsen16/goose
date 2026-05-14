@@ -33,11 +33,22 @@ const NEVER_SUMMARIZE_TOOLS: &[&str] = &[
     "developer__edit",
     "developer__text_editor",
     "todo_write",
+    "developer__todo_write",
     "platform__todo_write",
 ];
 
+/// Tools whose response is a source file: drives `select_summary_system_prompt`
+/// to swap in a structural-outline template that preserves symbol names and
+/// line numbers. Listed both with and without the `developer__` prefix because
+/// providers vary in how they surface the tool.
+const CODE_READING_TOOLS: &[&str] = &["read", "developer__read"];
+
 fn is_summarizable_tool(name: &str) -> bool {
     !NEVER_SUMMARIZE_TOOLS.contains(&name)
+}
+
+fn is_code_reading_tool(name: &str) -> bool {
+    CODE_READING_TOOLS.contains(&name)
 }
 
 fn tool_pair_summarization_enabled() -> bool {
@@ -551,9 +562,10 @@ const CODE_READING_SUMMARY_TEMPLATE: &str = indoc! {r#"
 /// template. `text_editor` is intentionally absent — it lives in
 /// [`NEVER_SUMMARIZE_TOOLS`] and never reaches this dispatch.
 fn select_summary_system_prompt(tool_name: &str) -> &'static str {
-    match tool_name {
-        "read" | "developer__read" => CODE_READING_SUMMARY_TEMPLATE,
-        _ => DEFAULT_SUMMARY_TEMPLATE,
+    if is_code_reading_tool(tool_name) {
+        CODE_READING_SUMMARY_TEMPLATE
+    } else {
+        DEFAULT_SUMMARY_TEMPLATE
     }
 }
 
@@ -565,19 +577,22 @@ pub async fn summarize_tool_call(
 ) -> Result<Message> {
     let messages = conversation.messages();
 
-    let mut tool_name: Option<String> = None;
+    let tool_name: Option<String> = messages.iter().find_map(|m| {
+        m.content.iter().find_map(|c| match c {
+            MessageContent::ToolRequest(req) if req.id == tool_id => req
+                .tool_call
+                .as_ref()
+                .ok()
+                .map(|call| call.name.to_string()),
+            _ => None,
+        })
+    });
+
     let matching_messages: Vec<&Message> = messages
         .iter()
         .filter(|m| {
             m.content.iter().any(|c| match c {
-                MessageContent::ToolRequest(req) if req.id == tool_id => {
-                    if tool_name.is_none() {
-                        if let Ok(call) = &req.tool_call {
-                            tool_name = Some(call.name.to_string());
-                        }
-                    }
-                    true
-                }
+                MessageContent::ToolRequest(req) => req.id == tool_id,
                 MessageContent::ToolResponse(resp) => resp.id == tool_id,
                 _ => false,
             })
@@ -600,7 +615,9 @@ pub async fn summarize_tool_call(
     let user_message = Message::user().with_text(formatted);
     let summarization_request = vec![user_message];
 
-    let system_prompt = select_summary_system_prompt(tool_name.as_deref().unwrap_or(""));
+    let system_prompt = tool_name
+        .as_deref()
+        .map_or(DEFAULT_SUMMARY_TEMPLATE, select_summary_system_prompt);
 
     let (mut response, _) = provider
         .complete_fast(session_id, system_prompt, &summarization_request, &[])

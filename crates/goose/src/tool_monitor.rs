@@ -65,6 +65,7 @@ pub const STATE_CHANGE_TOOLS: &[&str] = &[
     "developer__edit",
     "developer__text_editor",
     "developer__todo_write",
+    "platform__todo_write",
 ];
 
 /// Drop the most-recent entry of a newest-first-ordered id list. The newest

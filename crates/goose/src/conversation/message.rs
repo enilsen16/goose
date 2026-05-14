@@ -771,12 +771,23 @@ impl Message {
     }
 
     pub fn agent_visible_content(&self) -> Message {
+        self.filter_content_for_audience(Role::Assistant)
+    }
+
+    /// Symmetric to [`agent_visible_content`] — keeps content the user can see
+    /// (unannotated content + content annotated for `Role::User`) and drops
+    /// assistant-only metadata like the `<active-working-context>` block
+    /// goose2 prepends to user messages.
+    pub fn user_visible_content(&self) -> Message {
+        self.filter_content_for_audience(Role::User)
+    }
+
+    fn filter_content_for_audience(&self, audience: Role) -> Message {
         let filtered_content = self
             .content
             .iter()
-            .filter_map(|c| c.filter_for_audience(Role::Assistant))
+            .filter_map(|c| c.filter_for_audience(audience.clone()))
             .collect();
-
         Message {
             content: filtered_content,
             ..self.clone()
@@ -933,12 +944,7 @@ impl Message {
     /// user actually typed, not as_concat_text which includes system-injected
     /// context tags.
     pub fn user_visible_text(&self) -> String {
-        self.content
-            .iter()
-            .filter_map(|c| c.filter_for_audience(Role::User))
-            .filter_map(|c| c.as_text().map(String::from))
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.user_visible_content().as_concat_text()
     }
 
     /// Check if the message is a tool call
