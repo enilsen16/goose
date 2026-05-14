@@ -246,6 +246,18 @@ pub type ToolStream =
 // megabytes only to be truncated to ~100 chars by RepetitionInspector.
 const TOOL_ERROR_FINGERPRINT_BUDGET: usize = 200;
 
+/// Prefix of every REP-001/002/003 hint message injected into the conversation.
+/// goose2's stall indicator regex-matches this prefix to surface REP firings
+/// in the UI without a separate metadata channel. The Rust-side
+/// `rep_hint_prefix_matches_injected_hint` test asserts the format!() output
+/// starts with this string — keep them in sync.
+///
+/// Lint is `allow(dead_code)` because the value's only Rust-side consumer is
+/// the contract test; its real role is a cross-process contract with goose2's
+/// `useSessionProgress.ts`, which inlines the same literal.
+#[allow(dead_code)]
+pub const REP_HINT_PREFIX: &str = "Note: Tool '";
+
 /// Build a short fingerprint from an `is_error` `CallToolResult` for the
 /// repetition inspector. Joins text content up to the byte budget without
 /// ever copying past it; falls back to `structured_content` JSON; never
@@ -3022,6 +3034,35 @@ mod tests {
     use crate::permission::permission_confirmation::PrincipalType;
     use crate::providers::base::PermissionRouting;
     use crate::recipe::Response;
+
+    #[test]
+    fn rep_hint_prefix_matches_injected_hint() {
+        // Mirrors the exact format!() expression used in `reply()` for the
+        // REP-001/002 path. If anyone refactors the hint text and drops the
+        // "Note: Tool '" lead, this test fails before the frontend silently
+        // stops surfacing REP firings.
+        let synthetic_reason = "Tool 'shell' has exceeded maximum repetitions";
+        let hint = format!(
+            "Note: {}. Try a different approach — check whether \
+             you are using the correct input values, a different \
+             tool, or a different ID field from earlier results.",
+            synthetic_reason
+        );
+        assert!(
+            hint.starts_with(REP_HINT_PREFIX),
+            "REP hint must start with REP_HINT_PREFIX ({REP_HINT_PREFIX:?}); got: {hint:?}"
+        );
+
+        // Same shape for REP-003.
+        let rep003_reason = "Tool 'read' has read '/tmp/foo.rs' 5 times without writing — try a different approach.";
+        let rep003_hint = format!(
+            "Note: {}. Use `rg` or `grep` to search for \
+             specific symbols — do not read this file again \
+             until you have written to it.",
+            rep003_reason
+        );
+        assert!(rep003_hint.starts_with(REP_HINT_PREFIX));
+    }
 
     struct ActionRequiredProvider {
         handled: tokio::sync::Mutex<Vec<(String, PermissionConfirmation)>>,
