@@ -1,5 +1,7 @@
 use crate::conversation::message::{Message, MessageContent};
 use crate::tool_monitor::STATE_CHANGE_TOOLS;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use rmcp::model::Role;
 
 pub const STALL_HINT: &str = "Note: No forward progress since your last response — \
@@ -8,6 +10,32 @@ summarize what is blocking you, the design choice you are facing, or what you ne
 from me, then proceed.";
 
 const STALL_HINT_PREFIX: &str = "Note: No forward progress";
+
+pub const PLAN_HINT: &str = "Note: This looks like a multi-phase implementation. \
+Before making changes, call `todo_write` to externalize the plan — your todo content \
+is auto-injected on every turn, so you don't need to re-state it in `thinking` blocks. \
+Update items in place as you go.";
+
+const PLAN_HINT_PREFIX: &str = "Note: This looks like a multi-phase";
+
+// Capitalized .md filenames are a high-signal convention for design docs.
+static PLAN_FILENAME_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\b(PLAN|BLUEPRINT|DESIGN|SPEC|ROADMAP)\.md\b").expect("static regex")
+});
+
+// Action verb + the word "plan" within 30 chars. Case-insensitive on the verb.
+static PLAN_ACTION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)\b(implement|execute|follow|build out|work through|go through)\b.{0,30}\bplan\b",
+    )
+    .expect("static regex")
+});
+
+const TODO_WRITE_TOOL_NAMES: &[&str] = &[
+    "todo_write",
+    "developer__todo_write",
+    "platform__todo_write",
+];
 
 pub fn is_bare_nudge(text: &str) -> bool {
     let trimmed = text
@@ -51,10 +79,9 @@ pub fn no_state_change_since_prior_user(messages: &[Message]) -> bool {
 }
 
 /// Cooldown check: looks at the user message *before* the current nudge
-/// (i.e. second-most-recent user message in history) and returns true if it
-/// begins with the stall-hint prefix. Used to avoid firing the hint twice
-/// in a row when the user types another bare nudge.
-pub fn previous_user_message_is_stall_hint(messages: &[Message]) -> bool {
+/// (i.e. second-most-recent user message in history) and returns true if its
+/// first non-empty text content begins with `prefix`.
+fn previous_user_message_starts_with(messages: &[Message], prefix: &str) -> bool {
     let mut user_count = 0u32;
     for msg in messages.iter().rev() {
         if msg.role != Role::User {
@@ -75,8 +102,48 @@ pub fn previous_user_message_is_stall_hint(messages: &[Message]) -> bool {
         }
         user_count += 1;
         if user_count == 2 {
-            return text_for_msg.unwrap().starts_with(STALL_HINT_PREFIX);
+            return text_for_msg.unwrap().starts_with(prefix);
         }
+    }
+    false
+}
+
+/// True if we already injected the stall hint on the previous user turn.
+/// Suppresses re-firing on consecutive bare nudges.
+pub fn previous_user_message_is_stall_hint(messages: &[Message]) -> bool {
+    previous_user_message_starts_with(messages, STALL_HINT_PREFIX)
+}
+
+/// True if we already injected the plan hint on the previous user turn.
+pub fn previous_user_message_is_plan_hint(messages: &[Message]) -> bool {
+    previous_user_message_starts_with(messages, PLAN_HINT_PREFIX)
+}
+
+/// Detects plan-shaped user requests: either a capitalized `.md` filename
+/// (PLAN.md / BLUEPRINT.md / etc.) or an action verb paired with the word
+/// "plan" (e.g. "implement this plan", "follow the plan").
+pub fn is_plan_implementation_request(text: &str) -> bool {
+    PLAN_FILENAME_RE.is_match(text) || PLAN_ACTION_RE.is_match(text)
+}
+
+/// True if the most recent assistant turn (if any) issued a `todo_write` tool
+/// request. Walks newest-first; stops at the first assistant message it
+/// encounters — earlier todo_write calls in older turns don't suppress.
+pub fn most_recent_assistant_called_todo_write(messages: &[Message]) -> bool {
+    for msg in messages.iter().rev() {
+        if msg.role != Role::Assistant {
+            continue;
+        }
+        for content in &msg.content {
+            if let MessageContent::ToolRequest(tr) = content {
+                if let Ok(tc) = &tr.tool_call {
+                    if TODO_WRITE_TOOL_NAMES.contains(&tc.name.as_ref()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
     false
 }
@@ -92,6 +159,22 @@ pub fn should_inject_stall_hint(current_user_text: &str, messages: &[Message]) -
         return false;
     }
     no_state_change_since_prior_user(messages)
+}
+
+/// Returns true if the current user message looks like a plan-implementation
+/// request, the most recent assistant turn didn't already call `todo_write`,
+/// and we didn't already nag on the prior user turn.
+pub fn should_inject_plan_hint(current_user_text: &str, messages: &[Message]) -> bool {
+    if !is_plan_implementation_request(current_user_text) {
+        return false;
+    }
+    if previous_user_message_is_plan_hint(messages) {
+        return false;
+    }
+    if most_recent_assistant_called_todo_write(messages) {
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -263,5 +346,138 @@ mod tests {
             user("yes"),
         ];
         assert!(!should_inject_stall_hint("yes", &msgs));
+    }
+
+    // ── Plan-hint tests ──────────────────────────────────────────
+
+    #[test]
+    fn plan_request_recognizes_capitalized_md_files() {
+        for t in [
+            "Help me implement this plan -  PLUGIN_SYSTEM_PLAN.md",
+            "look at PLAN.md",
+            "follow BLUEPRINT.md",
+            "check DESIGN.md",
+            "implement the SPEC.md please",
+            "ROADMAP.md is the source of truth",
+        ] {
+            assert!(
+                is_plan_implementation_request(t),
+                "should detect plan-shaped request in {t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_request_recognizes_action_verb_phrases() {
+        for t in [
+            "implement this plan",
+            "Implement the plan",
+            "execute the plan now",
+            "follow our deployment plan step by step",
+            "go through the plan one item at a time",
+            "work through the plan with me",
+        ] {
+            assert!(
+                is_plan_implementation_request(t),
+                "should detect plan-shaped request in {t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_request_rejects_non_plan_messages() {
+        for t in [
+            "what's our deployment plan?",
+            "can you read plan.md", // lowercase .md filename, no action verb
+            "explain how this works",
+            "the plan we discussed",     // no action verb
+            "review the planning notes", // no bare "plan"
+        ] {
+            assert!(
+                !is_plan_implementation_request(t),
+                "should NOT detect plan-shaped request in {t:?}"
+            );
+        }
+    }
+
+    fn assistant_tool_with_name(name: &'static str, id: &str) -> Message {
+        let tool_call = Ok(CallToolRequestParams::new(name)
+            .with_arguments(json!({}).as_object().cloned().unwrap_or_default()));
+        Message::assistant().with_tool_request(id, tool_call)
+    }
+
+    #[test]
+    fn most_recent_assistant_called_todo_write_detects_bare_name() {
+        let msgs = vec![
+            user("implement the plan"),
+            assistant_tool_with_name("todo_write", "tw-1"),
+        ];
+        assert!(most_recent_assistant_called_todo_write(&msgs));
+    }
+
+    #[test]
+    fn most_recent_assistant_called_todo_write_detects_prefixed_name() {
+        let msgs = vec![
+            user("implement the plan"),
+            assistant_tool_with_name("developer__todo_write", "tw-1"),
+        ];
+        assert!(most_recent_assistant_called_todo_write(&msgs));
+    }
+
+    #[test]
+    fn most_recent_assistant_called_todo_write_returns_false_for_recent_other_tool() {
+        let msgs = vec![
+            user("implement the plan"),
+            assistant_tool_with_name("read", "r-1"),
+        ];
+        assert!(!most_recent_assistant_called_todo_write(&msgs));
+    }
+
+    #[test]
+    fn most_recent_assistant_called_todo_write_only_checks_most_recent() {
+        let msgs = vec![
+            user("first"),
+            assistant_tool_with_name("todo_write", "tw-1"), // older
+            user("second"),
+            assistant_tool_with_name("read", "r-1"), // most recent assistant turn
+        ];
+        assert!(!most_recent_assistant_called_todo_write(&msgs));
+    }
+
+    #[test]
+    fn should_inject_plan_fires_on_plan_file_with_no_todo_write() {
+        let msgs = vec![user("Help me implement this plan - PLUGIN_SYSTEM_PLAN.md")];
+        assert!(should_inject_plan_hint(
+            "Help me implement this plan - PLUGIN_SYSTEM_PLAN.md",
+            &msgs
+        ));
+    }
+
+    #[test]
+    fn should_inject_plan_skips_when_todo_write_already_called() {
+        let msgs = vec![
+            user("implement the plan"),
+            assistant_tool_with_name("todo_write", "tw-1"),
+            user("implement the plan now"),
+        ];
+        assert!(!should_inject_plan_hint("implement the plan now", &msgs));
+    }
+
+    #[test]
+    fn should_inject_plan_skips_on_cooldown() {
+        let msgs = vec![
+            user("implement the plan"),
+            Message::assistant().with_text("ok"),
+            user(PLAN_HINT),
+            Message::assistant().with_text("understood"),
+            user("execute the plan"),
+        ];
+        assert!(!should_inject_plan_hint("execute the plan", &msgs));
+    }
+
+    #[test]
+    fn should_inject_plan_skips_on_non_plan_input() {
+        let msgs = vec![user("look at line 42")];
+        assert!(!should_inject_plan_hint("look at line 42", &msgs));
     }
 }
