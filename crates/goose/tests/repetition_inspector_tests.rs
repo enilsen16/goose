@@ -46,7 +46,7 @@ async fn run_inspect(
 /// the (max_repetitions + 1)th identical call is denied; changing parameters resets the streak.
 #[tokio::test]
 async fn test_repetition_inspector_denies_after_exceeding_and_resets_on_param_change() {
-    let inspector = RepetitionInspector::new(Some(2));
+    let inspector = RepetitionInspector::new(Some(2), None);
     let v1 = serde_json::json!({"id": 123});
     let v2 = serde_json::json!({"id": 456});
 
@@ -79,7 +79,7 @@ async fn test_repetition_inspector_denies_after_exceeding_and_resets_on_param_ch
 
 #[tokio::test]
 async fn test_error_pattern_fires_after_threshold() {
-    let inspector = RepetitionInspector::new(None);
+    let inspector = RepetitionInspector::new(None, None);
     for _ in 0..3 {
         inspector.record_error("my_tool", "404 Not Found");
     }
@@ -100,7 +100,7 @@ async fn test_error_pattern_fires_after_threshold() {
 
 #[tokio::test]
 async fn test_error_pattern_does_not_fire_before_threshold() {
-    let inspector = RepetitionInspector::new(None);
+    let inspector = RepetitionInspector::new(None, None);
     for _ in 0..2 {
         inspector.record_error("my_tool", "404 Not Found");
     }
@@ -121,7 +121,7 @@ async fn test_error_pattern_does_not_fire_before_threshold() {
 
 #[tokio::test]
 async fn test_error_pattern_resets_on_success() {
-    let inspector = RepetitionInspector::new(None);
+    let inspector = RepetitionInspector::new(None, None);
     inspector.record_error("my_tool", "404 Not Found");
     inspector.record_error("my_tool", "404 Not Found");
     inspector.record_success();
@@ -143,7 +143,7 @@ async fn test_error_pattern_resets_on_success() {
 
 #[tokio::test]
 async fn test_error_pattern_streak_not_cleared_by_unrelated_tool() {
-    let inspector = RepetitionInspector::new(None);
+    let inspector = RepetitionInspector::new(None, None);
     for _ in 0..3 {
         inspector.record_error("tool_a", "timeout");
     }
@@ -176,7 +176,7 @@ async fn test_error_pattern_streak_not_cleared_by_unrelated_tool() {
 
 #[tokio::test]
 async fn test_error_pattern_does_not_cross_tool_names() {
-    let inspector = RepetitionInspector::new(None);
+    let inspector = RepetitionInspector::new(None, None);
     for _ in 0..3 {
         inspector.record_error("tool_a", "same error");
     }

@@ -571,13 +571,18 @@ impl Agent {
 
         // GOOSE_MAX_TOOL_REPETITIONS caps consecutive identical (same name+args) calls
         // before REP-001 fires; defaults to 5 to catch tight loops without being too
-        // aggressive on legitimate retry patterns.
+        // aggressive on legitimate retry patterns. GOOSE_MAX_SAME_PATH_READS tunes
+        // REP-003's path-read threshold; None lets the inspector use its built-in default.
         let max_tool_repetitions = Config::global()
             .get_param::<u32>("GOOSE_MAX_TOOL_REPETITIONS")
             .unwrap_or(5);
-        tool_inspection_manager.add_inspector(Box::new(RepetitionInspector::new(Some(
-            max_tool_repetitions,
-        ))));
+        let max_same_path_reads = Config::global()
+            .get_param::<u32>("GOOSE_MAX_SAME_PATH_READS")
+            .ok();
+        tool_inspection_manager.add_inspector(Box::new(RepetitionInspector::new(
+            Some(max_tool_repetitions),
+            max_same_path_reads,
+        )));
 
         tool_inspection_manager
     }
