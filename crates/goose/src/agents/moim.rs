@@ -1,8 +1,29 @@
 use crate::agents::extension_manager::ExtensionManager;
 use crate::conversation::message::Message;
-use crate::conversation::{fix_conversation, Conversation};
+use crate::conversation::{
+    fix_conversation, Conversation, ISSUE_ADDED_PLACEHOLDER_TO_EMPTY_TOOL_RESULT,
+    ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES, ISSUE_MERGED_CONSECUTIVE_USER_MESSAGES,
+    ISSUE_MERGED_TEXT_CONTENT, ISSUE_REMOVED_EMPTY_MESSAGE,
+    ISSUE_REMOVED_TRAILING_ASSISTANT_MESSAGE, ISSUE_TRIMMED_TRAILING_WHITESPACE_ASSISTANT,
+};
 use rmcp::model::Role;
 use std::path::Path;
+
+// Issue strings produced by `fix_conversation` that MOIM injection treats as
+// benign side effects of inserting a `<info-msg>` user message just before the
+// last assistant turn. Anything else fires a warning and aborts the injection.
+//
+// Sourced from `crate::conversation::ISSUE_*` constants so this stays in sync
+// when fix_conversation's issue strings change.
+const EXPECTED_MOIM_ISSUES: &[&str] = &[
+    ISSUE_MERGED_CONSECUTIVE_USER_MESSAGES,
+    ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES,
+    ISSUE_ADDED_PLACEHOLDER_TO_EMPTY_TOOL_RESULT,
+    ISSUE_TRIMMED_TRAILING_WHITESPACE_ASSISTANT,
+    ISSUE_REMOVED_TRAILING_ASSISTANT_MESSAGE,
+    ISSUE_REMOVED_EMPTY_MESSAGE,
+    ISSUE_MERGED_TEXT_CONTENT,
+];
 
 // Test-only utility. Do not use in production code. No `test` directive due to call outside crate.
 thread_local! {
@@ -33,13 +54,9 @@ pub async fn inject_moim(
         let (fixed, issues) = fix_conversation(Conversation::new_unvalidated(messages));
 
         let has_unexpected_issues = issues.iter().any(|issue| {
-            !issue.contains("Merged consecutive user messages")
-                && !issue.contains("Merged consecutive assistant messages")
-                && !issue.contains("Added placeholder to empty tool result")
-                && !issue.contains("Trimmed trailing whitespace from assistant message")
-                && !issue.contains("Removed trailing assistant message")
-                && !issue.contains("Removed empty message")
-                && !issue.contains("Merged text content")
+            !EXPECTED_MOIM_ISSUES
+                .iter()
+                .any(|expected| issue.contains(expected))
         });
 
         if has_unexpected_issues {

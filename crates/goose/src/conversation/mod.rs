@@ -194,6 +194,20 @@ impl<'a> IntoIterator for &'a Conversation {
     }
 }
 
+// Stable substrings used by `fix_conversation` for each kind of issue it reports.
+// Exported so consumers (e.g. MOIM injection) can match on them via the producer's
+// own constants, instead of duplicating string literals that drift on rename.
+pub const ISSUE_MERGED_TEXT_CONTENT: &str = "Merged text content";
+pub const ISSUE_TRIMMED_TRAILING_WHITESPACE_ASSISTANT: &str =
+    "Trimmed trailing whitespace from assistant message";
+pub const ISSUE_REMOVED_EMPTY_MESSAGE: &str = "Removed empty message";
+pub const ISSUE_ADDED_PLACEHOLDER_TO_EMPTY_TOOL_RESULT: &str =
+    "Added placeholder to empty tool result";
+pub const ISSUE_MERGED_CONSECUTIVE_USER_MESSAGES: &str = "Merged consecutive user messages";
+pub const ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES: &str =
+    "Merged consecutive assistant messages";
+pub const ISSUE_REMOVED_TRAILING_ASSISTANT_MESSAGE: &str = "Removed trailing assistant message";
+
 /// Fix a conversation that we're about to send to an LLM. So the first and last
 /// messages should always be from the user.
 pub fn fix_conversation(conversation: Conversation) -> (Conversation, Vec<String>) {
@@ -286,7 +300,7 @@ fn merge_text_content_items(messages: Vec<Message>) -> (Vec<Message>, Vec<String
             let content_len = message.content.len();
             let message = merge_text_content_in_message(message);
             if content_len != message.content.len() {
-                issues.push(String::from("Merged text content"))
+                issues.push(String::from(ISSUE_MERGED_TEXT_CONTENT))
             }
             messages.push(message);
             (messages, issues)
@@ -305,9 +319,7 @@ fn trim_assistant_text_whitespace(messages: Vec<Message>) -> (Vec<Message>, Vec<
                     if let MessageContent::Text(text) = content {
                         let trimmed = text.text.trim_end();
                         if trimmed.len() != text.text.len() {
-                            issues.push(
-                                "Trimmed trailing whitespace from assistant message".to_string(),
-                            );
+                            issues.push(ISSUE_TRIMMED_TRAILING_WHITESPACE_ASSISTANT.to_string());
                             text.text = trimmed.to_string();
                         }
                     }
@@ -330,7 +342,7 @@ fn remove_empty_messages(messages: Vec<Message>) -> (Vec<Message>, Vec<String>) 
                 .iter()
                 .all(|c| c.as_text().is_some_and(str::is_empty))
             {
-                issues.push("Removed empty message".to_string());
+                issues.push(ISSUE_REMOVED_EMPTY_MESSAGE.to_string());
                 false
             } else {
                 true
@@ -370,7 +382,7 @@ fn fix_empty_tool_results(messages: Vec<Message>) -> (Vec<Message>, Vec<String>)
                             // Add a placeholder text content so the tool result isn't empty
                             result.content.push(Content::text("(empty result)"));
                             issues.push(format!(
-                                "Added placeholder to empty tool result '{}'",
+                                "{ISSUE_ADDED_PLACEHOLDER_TO_EMPTY_TOOL_RESULT} '{}'",
                                 tool_response.id
                             ));
                         }
@@ -487,7 +499,12 @@ pub fn merge_consecutive_messages(messages: Vec<Message>) -> (Vec<Message>, Vec<
             let effective = effective_role(&message);
             if effective_role(last) == effective {
                 last.content.extend(message.content);
-                issues.push(format!("Merged consecutive {} messages", effective));
+                let issue = match effective.as_str() {
+                    "user" => ISSUE_MERGED_CONSECUTIVE_USER_MESSAGES.to_string(),
+                    "assistant" => ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES.to_string(),
+                    other => format!("Merged consecutive {other} messages"),
+                };
+                issues.push(issue);
                 continue;
             }
         }
@@ -528,7 +545,7 @@ fn fix_lead_trail(mut messages: Vec<Message>) -> (Vec<Message>, Vec<String>) {
     if let Some(last) = messages.last() {
         if last.role == Role::Assistant {
             messages.pop();
-            issues.push("Removed trailing assistant message".to_string());
+            issues.push(ISSUE_REMOVED_TRAILING_ASSISTANT_MESSAGE.to_string());
         }
     }
 
