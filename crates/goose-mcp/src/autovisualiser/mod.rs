@@ -841,26 +841,9 @@ impl AutoVisualiserRouter {
     /// show a Sankey diagram from flow data
     #[tool(
         name = "render_sankey",
-        description = r#"show a Sankey diagram from flow data
-The data must contain:
-- nodes: Array of objects with 'name' and optional 'category' properties
-- links: Array of objects with 'source', 'target', and 'value' properties
-
-IMPORTANT: Links must NOT form cycles (e.g. A→B and B→A). Sankey diagrams are
-directional acyclic flows. If the data has circular relationships, restructure
-them so flow moves in one direction (e.g. add a separate node like "Re-signed"
-instead of linking back to an earlier node).
-
-Example:
-{
-  "nodes": [
-    {"name": "Source A", "category": "source"},
-    {"name": "Target B", "category": "target"}
-  ],
-  "links": [
-    {"source": "Source A", "target": "Target B", "value": 100}
-  ]
-}"#,
+        description = "Show a Sankey flow diagram with weighted directed links between nodes. \
+                       Links must be acyclic — if your data has loops, insert an intermediate \
+                       node (e.g. \"Re-signed\") instead of linking back.",
         meta = ui_resource_meta("ui://autovisualiser/sankey")
     )]
     pub async fn render_sankey(
@@ -905,26 +888,8 @@ Example:
     /// show a radar chart (spider chart) for multi-dimensional data comparison
     #[tool(
         name = "render_radar",
-        description = r#"show a radar chart (spider chart) for multi-dimensional data comparison
-
-The data must contain:
-- labels: Array of strings representing the dimensions/axes
-- datasets: Array of dataset objects with 'label' and 'data' properties
-
-Example:
-{
-  "labels": ["Speed", "Strength", "Endurance", "Agility", "Intelligence"],
-  "datasets": [
-    {
-      "label": "Player 1",
-      "data": [85, 70, 90, 75, 80]
-    },
-    {
-      "label": "Player 2",
-      "data": [75, 85, 80, 90, 70]
-    }
-  ]
-}"#,
+        description = "Show a radar/spider chart comparing multi-dimensional datasets. \
+                       Each dataset's `data` length must match `labels` length.",
         meta = ui_resource_meta("ui://autovisualiser/radar")
     )]
     pub async fn render_radar(
@@ -1112,22 +1077,8 @@ Example:
     /// Show a chord diagram visualization for relationships and flows
     #[tool(
         name = "render_chord",
-        description = r#"Show a chord diagram visualization for showing relationships and flows between entities.
-
-The data must contain:
-- labels: Array of strings representing the entities
-- matrix: 2D array of numbers representing flows (matrix[i][j] = flow from i to j)
-
-Example:
-{
-  "labels": ["North America", "Europe", "Asia", "Africa"],
-  "matrix": [
-    [0, 15, 25, 8],
-    [18, 0, 20, 12],
-    [22, 18, 0, 15],
-    [5, 10, 18, 0]
-  ]
-}"#,
+        description = "Show a chord diagram of flows between entities. `matrix` must be NxN \
+                       where N is `labels.len()`; matrix[i][j] is the flow from i to j.",
         meta = ui_resource_meta("ui://autovisualiser/chord")
     )]
     pub async fn render_chord(
@@ -1234,17 +1185,8 @@ Example:
     /// show a Mermaid diagram from Mermaid syntax
     #[tool(
         name = "render_mermaid",
-        description = r#"show a Mermaid diagram from Mermaid syntax
-
-Provide the Mermaid code as a string. Supports flowcharts, sequence diagrams, Gantt charts, etc.
-
-Example:
-graph TD;
-    A-->B;
-    A-->C;
-    B-->D;
-    C-->D;
-"#,
+        description = "Show a Mermaid diagram (flowcharts, sequence diagrams, Gantt charts, \
+                       state diagrams, etc.) from raw Mermaid source.",
         meta = ui_resource_meta("ui://autovisualiser/mermaid")
     )]
     pub async fn render_mermaid(
@@ -1274,20 +1216,8 @@ graph TD;
     /// show interactive line, scatter, or bar charts
     #[tool(
         name = "show_chart",
-        description = r#"show interactive line, scatter, or bar charts
-
-Required: type ('line', 'scatter', or 'bar'), datasets array
-Optional: labels, title, subtitle, xAxisLabel, yAxisLabel, options
-
-Example:
-{
-  "type": "line",
-  "title": "Monthly Sales",
-  "labels": ["Jan", "Feb", "Mar"],
-  "datasets": [
-    {"label": "Product A", "data": [65, 59, 80]}
-  ]
-}"#,
+        description = "Show an interactive line, scatter, or bar chart. Use this for \
+                       one-axis-over-time or simple X/Y series data.",
         meta = ui_resource_meta("ui://autovisualiser/chart")
     )]
     pub async fn show_chart(
