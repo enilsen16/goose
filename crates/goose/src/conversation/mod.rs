@@ -599,7 +599,12 @@ pub fn debug_conversation_fix(
 #[cfg(test)]
 mod tests {
     use crate::conversation::message::Message;
-    use crate::conversation::{debug_conversation_fix, fix_conversation, Conversation};
+    use crate::conversation::{
+        debug_conversation_fix, fix_conversation, Conversation,
+        ISSUE_ADDED_PLACEHOLDER_TO_EMPTY_TOOL_RESULT, ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES,
+        ISSUE_MERGED_CONSECUTIVE_USER_MESSAGES, ISSUE_MERGED_TEXT_CONTENT,
+        ISSUE_REMOVED_EMPTY_MESSAGE, ISSUE_REMOVED_TRAILING_ASSISTANT_MESSAGE,
+    };
     use rmcp::model::{CallToolRequestParams, Role};
     use rmcp::object;
 
@@ -718,8 +723,8 @@ mod tests {
         assert_has_issues_unordered!(
             fixed,
             issues,
-            "Merged consecutive assistant messages",
-            "Merged consecutive user messages",
+            ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES,
+            ISSUE_MERGED_CONSECUTIVE_USER_MESSAGES,
             "Removed tool response 'orphan_1' from assistant message",
             "Removed tool request 'bad_req' from user message",
         );
@@ -766,12 +771,12 @@ mod tests {
         assert_has_issues_unordered!(
             fixed,
             issues,
-            "Removed empty message",
+            ISSUE_REMOVED_EMPTY_MESSAGE,
             "Removed orphaned tool response 'wrong_id'",
             "Removed orphaned tool request 'search_1'",
             "Removed orphaned tool request 'search_2'",
-            "Removed empty message",
-            "Removed empty message",
+            ISSUE_REMOVED_EMPTY_MESSAGE,
+            ISSUE_REMOVED_EMPTY_MESSAGE,
             "Removed leading assistant message",
             "Added placeholder user message to empty conversation",
         );
@@ -810,7 +815,7 @@ mod tests {
             fixed,
             issues,
             "Removed orphaned tool request 'toolu_bdrk_018adWbP4X26CfoJU5hkhu3i'",
-            "Merged consecutive assistant messages"
+            ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES,
         )
     }
 
@@ -870,7 +875,7 @@ mod tests {
         let (fixed, issues) = run_verify(messages);
 
         assert_eq!(fixed.len(), 3);
-        assert_has_issues_unordered!(fixed, issues, "Merged text content");
+        assert_has_issues_unordered!(fixed, issues, ISSUE_MERGED_TEXT_CONTENT);
 
         let fixed_msg = &fixed[1];
         assert_eq!(fixed_msg.content.len(), 1);
@@ -908,7 +913,7 @@ mod tests {
         let (fixed, issues) = run_verify(messages);
 
         assert_eq!(fixed.len(), 3);
-        assert_has_issues_unordered!(fixed, issues, "Merged text content");
+        assert_has_issues_unordered!(fixed, issues, ISSUE_MERGED_TEXT_CONTENT);
         let fixed_msg = &fixed[1];
 
         assert_eq!(fixed_msg.content.len(), 2);
@@ -1110,13 +1115,13 @@ mod tests {
         // Should have merged consecutive assistants, removed leading, and removed trailing
         assert!(issues
             .iter()
-            .any(|i| i.contains("Merged consecutive assistant")));
+            .any(|i| i.contains(ISSUE_MERGED_CONSECUTIVE_ASSISTANT_MESSAGES)));
         assert!(issues
             .iter()
             .any(|i| i.contains("Removed leading assistant")));
         assert!(issues
             .iter()
-            .any(|i| i.contains("Removed trailing assistant")));
+            .any(|i| i.contains(ISSUE_REMOVED_TRAILING_ASSISTANT_MESSAGE)));
 
         let fixed_messages = fixed.messages();
 
@@ -1211,7 +1216,7 @@ mod tests {
         // Should have added a placeholder
         assert!(issues
             .iter()
-            .any(|i| i.contains("Added placeholder to empty tool result")));
+            .any(|i| i.contains(ISSUE_ADDED_PLACEHOLDER_TO_EMPTY_TOOL_RESULT)));
 
         // Find the tool response and verify it has content now
         let tool_response_msg = fixed
