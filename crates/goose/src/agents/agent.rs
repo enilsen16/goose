@@ -2216,9 +2216,14 @@ impl Agent {
                                             // nudge to grep/rg instead of re-reading. On the
                                             // second+ fire the model has demonstrably ignored
                                             // the first nudge — escalate to a user-visible
-                                            // assistant message so a human can redirect.
+                                            // message so a human can redirect. Both messages
+                                            // are role=User: an assistant message here would
+                                            // sit directly after the user toolResponse pushed
+                                            // a few lines above, producing two consecutive
+                                            // assistant turns the next provider call cannot
+                                            // safely format.
                                             let msg = if result.fire_count >= 2 {
-                                                Message::assistant().with_text(format!(
+                                                Message::user().with_text(format!(
                                                     "Stopped: the same path has been re-read after a warning ({}). \
                                                      Tell me what you want me to look for instead of re-reading the file.",
                                                     result.reason

@@ -83,9 +83,13 @@ pub fn process_tool_response(
             // form — defeating the offload (observed at msgs 14486/14489/14492
             // each storing ~725 KB despite a "saved to file" notice).
             if let Some(structured) = result.structured_content.as_mut() {
+                // Use `chars().count()` to match the text path above —
+                // `s.len()` would compare bytes against a char-tuned
+                // threshold, over-triggering on UTF-8 and on escape-heavy
+                // ASCII JSON encodings.
                 let should_strip = did_offload
                     || serde_json::to_string(structured)
-                        .map(|s| s.len() > threshold)
+                        .map(|s| s.chars().count() > threshold)
                         .unwrap_or(false);
                 if should_strip {
                     truncate_large_strings_in_value(structured);
@@ -102,6 +106,15 @@ pub fn process_tool_response(
 /// `STRUCTURED_FIELD_TRUNCATE_THRESHOLD` with the truncation marker. Small
 /// fields (exit_code, short stderr snippets) are preserved so the model can
 /// still reason about them.
+///
+/// **Type-safety caveat:** the marker is itself a `String`, so consumers that
+/// do typed `serde_json::from_value::<T>(structured_content)` are only safe
+/// for fields typed as `String` (or `Value`). Today's only such consumer is
+/// `extract_shell_output<ShellOutput>` where the large fields are `stdout` /
+/// `stderr` (both `String`) — fine. If a future consumer adds a non-string
+/// field that can exceed the threshold, that consumer must either (a) widen
+/// the field's type, (b) tolerate the marker, or (c) handle truncation here
+/// in a type-aware way.
 fn truncate_large_strings_in_value(value: &mut Value) {
     match value {
         Value::String(s) => {

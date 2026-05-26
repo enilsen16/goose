@@ -376,17 +376,18 @@ impl ToolInspector for RepetitionInspector {
         // Deny a read tool that has hit the same path too many times without
         // writing to it — catches varying-offset read loops that exact-arg
         // matching misses (e.g. reading config.rs at offset 0, 75, 175, ...).
+        let rep003_start = results.len();
         for tool_request in tool_requests {
             if let Ok(tool_call) = &tool_request.tool_call {
                 if let Some(path) = extract_path_arg(tool_call.arguments.as_ref()) {
                     let read_ids = prior_path_read_ids(messages, tool_call.name.as_ref(), path);
                     let count = read_ids.len() as u32;
                     if count >= self.max_same_path_reads {
-                        let fire_count = {
-                            let mut fires = self.rep003_fires.lock().unwrap();
-                            *fires += 1;
-                            *fires
-                        };
+                        // fire_count is patched below — one increment of
+                        // rep003_fires per inspect() call, shared across every
+                        // REP-003 result in this batch. Per-request increment
+                        // would let the model emit N parallel reads and skip
+                        // the nudge-then-escalate boundary on the same turn.
                         results.push(InspectionResult {
                             tool_request_id: tool_request.id.clone(),
                             action: InspectionAction::Deny,
@@ -398,10 +399,20 @@ impl ToolInspector for RepetitionInspector {
                             inspector_name: self.name().to_string(),
                             finding_id: Some(FINDING_ID_REPEATED_PATH.to_string()),
                             prior_tool_ids: drop_newest(read_ids),
-                            fire_count,
+                            fire_count: 0,
                         });
                     }
                 }
+            }
+        }
+        if results.len() > rep003_start {
+            let fire_count = {
+                let mut fires = self.rep003_fires.lock().unwrap();
+                *fires += 1;
+                *fires
+            };
+            for r in &mut results[rep003_start..] {
+                r.fire_count = fire_count;
             }
         }
 
@@ -773,6 +784,45 @@ mod tests {
             .unwrap();
         assert_eq!(r2.len(), 1);
         assert_eq!(r2[0].fire_count, 2, "second fire escalates count");
+    }
+
+    #[tokio::test]
+    async fn rep003_fire_count_is_one_per_batch_not_per_request() {
+        // Parallel-tool-call models (Sonnet/Opus often emit several tool_calls
+        // in one assistant turn) can produce a batch where N requests all
+        // trigger REP-003. The counter should advance once per inspect(),
+        // not once per request — otherwise the user sees the "Stopped"
+        // escalation on the very first turn the loop is detected.
+        let inspector = RepetitionInspector::new(Some(100), None);
+        let path = "/tmp/foo.rs";
+        let history: Vec<Message> = (0..5)
+            .map(|i| read_request_msg(&format!("r-{i}"), path))
+            .collect();
+
+        let reqs = vec![
+            make_tool_request("cur-1", "read", json!({"path": path})),
+            make_tool_request("cur-2", "read", json!({"path": path})),
+            make_tool_request("cur-3", "read", json!({"path": path})),
+        ];
+        let results = inspector
+            .inspect("session", &reqs, &history, GooseMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 3, "all three batched requests fire REP-003");
+        for r in &results {
+            assert_eq!(
+                r.fire_count, 1,
+                "every result in the same inspect() batch shares fire_count=1"
+            );
+        }
+
+        // Next inspect() call advances the counter once.
+        let req2 = make_tool_request("cur-next", "read", json!({"path": path}));
+        let r2 = inspector
+            .inspect("session", &[req2], &history, GooseMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(r2[0].fire_count, 2);
     }
 
     #[tokio::test]
