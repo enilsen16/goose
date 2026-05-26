@@ -620,10 +620,12 @@ impl GooseAcpAgent {
         }
 
         if Config::global().get_goose_provider().ok().as_deref() == Some(req.provider_id.as_str()) {
-            return Err(agent_client_protocol::Error::invalid_params().with_detail(format!(
-                "Cannot delete active provider: {}",
-                req.provider_id
-            )));
+            return Err(
+                agent_client_protocol::Error::invalid_params().with_detail(format!(
+                    "Cannot delete active provider: {}",
+                    req.provider_id
+                )),
+            );
         }
 
         declarative_providers::remove_custom_provider(&req.provider_id)

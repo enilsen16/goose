@@ -242,6 +242,31 @@ fn get_tool_resource_uri(tool: &Tool) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Rank available tools by Jaro-Winkler similarity to `name`. Returns up to
+/// three suggestions with similarity ≥ 0.75; `None` if no candidate clears
+/// the bar. Used to add a "Did you mean: …" line to tool-not-found errors —
+/// the model hallucinated names like `read` six times across observed
+/// sessions when the actual tool was `developer__text_editor`.
+fn suggest_tool_names(name: &str, tools: &[Tool]) -> Option<Vec<String>> {
+    use strsim::jaro_winkler;
+    let mut scored: Vec<(f64, &str)> = tools
+        .iter()
+        .map(|t| (jaro_winkler(name, t.name.as_ref()), t.name.as_ref()))
+        .filter(|(score, _)| *score >= 0.75)
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let picks: Vec<String> = scored
+        .into_iter()
+        .take(3)
+        .map(|(_, n)| n.to_string())
+        .collect();
+    if picks.is_empty() {
+        None
+    } else {
+        Some(picks)
+    }
+}
+
 fn remove_untrusted_mcp_app_meta(result: &mut CallToolResult) {
     let Some(meta) = result.meta.as_mut() else {
         return;
@@ -1621,11 +1646,15 @@ impl ExtensionManager {
             .collect::<Vec<&str>>()
             .join(", ");
 
+        let suggestion_prefix = suggest_tool_names(tool_name, &tools)
+            .map(|s| format!("Did you mean: {}? ", s.join(", ")))
+            .unwrap_or_default();
+
         Err(ErrorData::new(
             ErrorCode::RESOURCE_NOT_FOUND,
             format!(
-                "Tool '{}' not found. Available tools: [{}]",
-                tool_name, available
+                "Tool '{}' not found. {}Available tools: [{}]",
+                tool_name, suggestion_prefix, available
             ),
             None,
         ))

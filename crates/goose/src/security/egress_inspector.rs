@@ -293,6 +293,7 @@ impl ToolInspector for EgressInspector {
                 inspector_name: self.name().to_string(),
                 finding_id: None,
                 prior_tool_ids: Vec::new(),
+                fire_count: 0,
             });
         }
 

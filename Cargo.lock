@@ -4542,6 +4542,7 @@ dependencies = [
  "shellexpand",
  "smithy-transport-reqwest",
  "sqlx",
+ "strsim",
  "strum 0.28.0",
  "symphonia",
  "sys-info",

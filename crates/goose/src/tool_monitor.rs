@@ -108,7 +108,16 @@ fn prior_matching_call_ids(messages: &[Message], reference: &InternalToolCall) -
 /// reads of `path` by `tool_name`, stopping at the first state-change tool
 /// targeting the same path. Returned ids are newest-first; the count is
 /// derivable as `.len() as u32`.
+///
+/// Short-circuits when `tool_name` is itself a state-change tool: a call
+/// that writes cannot, by definition, be stuck in a read-loop. Without this
+/// guard the same-name branch below counts prior `edit`/`write` calls on the
+/// same path as "reads" and REP-003 falsely fires on legitimate iterative
+/// edits (see session 20260526_1 msg 13624).
 fn prior_path_read_ids(messages: &[Message], tool_name: &str, path: &str) -> Vec<String> {
+    if STATE_CHANGE_TOOLS.contains(&tool_name) {
+        return Vec::new();
+    }
     let mut ids = Vec::new();
     'msg: for msg in messages.iter().rev() {
         if msg.role != Role::Assistant {
@@ -183,6 +192,10 @@ pub struct RepetitionInspector {
     max_same_path_reads: u32,
     state: Mutex<RepetitionState>,
     error_state: Mutex<ErrorState>,
+    /// Cumulative REP-003 firings for the lifetime of this inspector (≈ one
+    /// session). Read by the agent to escalate from a model-only hint on the
+    /// first fire to a user-visible stop on subsequent fires.
+    rep003_fires: Mutex<u32>,
 }
 
 /// Check whether `call` is allowed given current state, and update state.
@@ -230,6 +243,7 @@ impl RepetitionInspector {
                 consecutive_count: 0,
                 streak_request_ids: Vec::new(),
             }),
+            rep003_fires: Mutex::new(0),
         }
     }
 
@@ -310,6 +324,7 @@ impl ToolInspector for RepetitionInspector {
                         inspector_name: self.name().to_string(),
                         finding_id: Some(FINDING_ID_REPEATED_CALLS.to_string()),
                         prior_tool_ids: prior_ids,
+                        fire_count: 0,
                     });
                 }
             }
@@ -342,6 +357,7 @@ impl ToolInspector for RepetitionInspector {
                                     inspector_name: self.name().to_string(),
                                     finding_id: Some(FINDING_ID_REPEATED_ERROR.to_string()),
                                     prior_tool_ids: prior_ids.clone(),
+                                    fire_count: 0,
                                 });
                                 denied = true;
                             }
@@ -366,6 +382,11 @@ impl ToolInspector for RepetitionInspector {
                     let read_ids = prior_path_read_ids(messages, tool_call.name.as_ref(), path);
                     let count = read_ids.len() as u32;
                     if count >= self.max_same_path_reads {
+                        let fire_count = {
+                            let mut fires = self.rep003_fires.lock().unwrap();
+                            *fires += 1;
+                            *fires
+                        };
                         results.push(InspectionResult {
                             tool_request_id: tool_request.id.clone(),
                             action: InspectionAction::Deny,
@@ -377,6 +398,7 @@ impl ToolInspector for RepetitionInspector {
                             inspector_name: self.name().to_string(),
                             finding_id: Some(FINDING_ID_REPEATED_PATH.to_string()),
                             prior_tool_ids: drop_newest(read_ids),
+                            fire_count,
                         });
                     }
                 }
@@ -725,6 +747,54 @@ mod tests {
         assert!(
             results.is_empty(),
             "write between reads should reset REP-003 counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn rep003_fire_count_increments_each_firing() {
+        let inspector = RepetitionInspector::new(Some(100), None);
+        let path = "/tmp/foo.rs";
+        let history: Vec<Message> = (0..5)
+            .map(|i| read_request_msg(&format!("r-{i}"), path))
+            .collect();
+
+        let req1 = make_tool_request("cur-1", "read", json!({"path": path}));
+        let r1 = inspector
+            .inspect("session", &[req1], &history, GooseMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(r1.len(), 1);
+        assert_eq!(r1[0].fire_count, 1, "first fire is 1-indexed");
+
+        let req2 = make_tool_request("cur-2", "read", json!({"path": path}));
+        let r2 = inspector
+            .inspect("session", &[req2], &history, GooseMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(r2.len(), 1);
+        assert_eq!(r2[0].fire_count, 2, "second fire escalates count");
+    }
+
+    #[tokio::test]
+    async fn rep003_skips_when_current_call_is_state_change_tool() {
+        // Session 20260526_1 hit this: model called `edit` on config.yaml
+        // five times (successful writes each time), and REP-003 misfired
+        // because prior_path_read_ids counted same-name prior calls before
+        // the STATE_CHANGE_TOOLS reset branch could trigger.
+        let inspector = RepetitionInspector::new(Some(100), None);
+        let path = "/Users/x/.config/goose/config.yaml";
+        let history: Vec<Message> = (0..5)
+            .map(|i| write_request_msg(&format!("e-{i}"), path))
+            .collect();
+        let req = make_tool_request("e-cur", "edit", json!({"path": path}));
+
+        let results = inspector
+            .inspect("session", &[req], &history, GooseMode::Auto)
+            .await
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "state-change tool (edit) on a path cannot be a read-loop"
         );
     }
 }

@@ -1,10 +1,18 @@
 use chrono::Utc;
 use rmcp::model::{CallToolResult, Content, ErrorData};
+use serde_json::Value;
 use std::fs::File;
 use std::io::Write;
 
 const DEFAULT_LARGE_TEXT_THRESHOLD: usize = 200_000;
 const RANGE_AWARE_TOOL_THRESHOLD: usize = 50_000;
+/// String fields in `structured_content` longer than this get truncated when an
+/// offload happens. Sized to keep small structured fields (exit_code, stderr
+/// snippets) intact while still catching the multi-hundred-kilobyte
+/// stdout payloads shell tools sometimes return.
+const STRUCTURED_FIELD_TRUNCATE_THRESHOLD: usize = 16_384;
+const STRUCTURED_FIELD_TRUNCATION_MARKER: &str =
+    "<truncated — see offloaded text content for full output>";
 
 fn threshold_for_tool(tool_name: &str) -> usize {
     // Tool names vary by provider (`shell`, `developer__shell`, `platform__developer__shell`,
@@ -35,6 +43,7 @@ pub fn process_tool_response(
     match response {
         Ok(mut result) => {
             let mut processed_contents = Vec::new();
+            let mut did_offload = false;
 
             for content in result.content {
                 match content.as_text() {
@@ -46,6 +55,7 @@ pub fn process_tool_response(
                                     processed_contents.push(Content::text(redirect_message(
                                         char_count, &file_path,
                                     )));
+                                    did_offload = true;
                                 }
                                 Err(e) => {
                                     let warning = format!(
@@ -66,9 +76,50 @@ pub fn process_tool_response(
             }
 
             result.content = processed_contents;
+
+            // Tools like `shell` mirror raw stdout/stderr into `structured_content`
+            // alongside text. Without parallel handling the offloaded text would
+            // get redirected while the same content stays inline in structured
+            // form — defeating the offload (observed at msgs 14486/14489/14492
+            // each storing ~725 KB despite a "saved to file" notice).
+            if let Some(structured) = result.structured_content.as_mut() {
+                let should_strip = did_offload
+                    || serde_json::to_string(structured)
+                        .map(|s| s.len() > threshold)
+                        .unwrap_or(false);
+                if should_strip {
+                    truncate_large_strings_in_value(structured);
+                }
+            }
+
             Ok(result)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Recursively walk a JSON value; replace any string field longer than
+/// `STRUCTURED_FIELD_TRUNCATE_THRESHOLD` with the truncation marker. Small
+/// fields (exit_code, short stderr snippets) are preserved so the model can
+/// still reason about them.
+fn truncate_large_strings_in_value(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            if s.len() > STRUCTURED_FIELD_TRUNCATE_THRESHOLD {
+                *s = STRUCTURED_FIELD_TRUNCATION_MARKER.to_string();
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                truncate_large_strings_in_value(item);
+            }
+        }
+        Value::Object(map) => {
+            for (_, v) in map.iter_mut() {
+                truncate_large_strings_in_value(v);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -250,5 +301,46 @@ mod tests {
         );
 
         let _ = fs::remove_file(extract_saved_path(msg));
+    }
+
+    #[test]
+    fn structured_content_large_strings_truncated_when_text_offloads() {
+        // Shell-shaped result: large text + structured_content mirroring stdout
+        // alongside small fields like exit_code. Without the fix the structured
+        // payload escapes the offload (observed at msgs 14486/14489/14492).
+        let large_text = "a".repeat(RANGE_AWARE_TOOL_THRESHOLD + 10_000);
+        let large_stdout = "x".repeat(STRUCTURED_FIELD_TRUNCATE_THRESHOLD + 1_000);
+        let structured = serde_json::json!({
+            "stdout": large_stdout,
+            "stderr": "short error",
+            "exit_code": 0,
+        });
+
+        let mut result = CallToolResult::success(vec![Content::text(large_text)]);
+        result.structured_content = Some(structured);
+        let processed = process_tool_response(Ok(result), "developer__shell").unwrap();
+
+        let redirect = &processed.content[0].as_text().expect("expected text").text;
+        assert!(redirect.contains("Tool output was"));
+        let _ = fs::remove_file(extract_saved_path(redirect));
+
+        let sc = processed
+            .structured_content
+            .expect("structured_content preserved");
+        assert_eq!(sc["stdout"], STRUCTURED_FIELD_TRUNCATION_MARKER);
+        assert_eq!(sc["stderr"], "short error");
+        assert_eq!(sc["exit_code"], 0);
+    }
+
+    #[test]
+    fn structured_content_left_alone_when_small_and_no_text_offload() {
+        let small_text = "hi";
+        let structured = serde_json::json!({"stdout": "ok", "exit_code": 0});
+
+        let mut result = CallToolResult::success(vec![Content::text(small_text.to_string())]);
+        result.structured_content = Some(structured.clone());
+        let processed = process_tool_response(Ok(result), "developer__shell").unwrap();
+
+        assert_eq!(processed.structured_content.unwrap(), structured);
     }
 }

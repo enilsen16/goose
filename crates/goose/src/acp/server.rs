@@ -723,7 +723,10 @@ fn tool_call_identity_meta(tool_request: &ToolRequest) -> Option<Meta> {
     );
 
     let mut meta = serde_json::Map::new();
-    meta.insert("goose".to_string(), serde_json::Value::Object(goose_meta));
+    meta.insert(
+        META_GOOSE_KEY.to_string(),
+        serde_json::Value::Object(goose_meta),
+    );
     Some(meta)
 }
 
@@ -733,7 +736,7 @@ fn tool_call_identity_meta(tool_request: &ToolRequest) -> Option<Meta> {
 fn with_tool_chain_summary_meta(base: Option<Meta>, summary: &str, count: usize) -> Option<Meta> {
     let mut meta = base.unwrap_or_default();
     let goose_entry = meta
-        .entry("goose".to_string())
+        .entry(META_GOOSE_KEY.to_string())
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
     let goose_obj = match goose_entry {
         serde_json::Value::Object(obj) => obj,
@@ -1166,8 +1169,11 @@ fn build_usage_update(session: &Session, context_limit: usize) -> UsageUpdate {
     update
 }
 
-/// `_meta` keys for accumulated session tokens. Mirrored on the goose2 side
-/// in `ui/goose2/src/shared/api/acpMetaKeys.ts` — keep in sync.
+/// Namespace key under which all goose-specific `_meta` fields are nested
+/// (e.g. `meta["goose"]["toolCall"]`). Part of the ACP wire contract.
+const META_GOOSE_KEY: &str = "goose";
+
+/// `_meta` keys for accumulated session tokens. Part of the ACP wire contract.
 const META_ACCUMULATED_TOTAL: &str = "goose.accumulatedTotal";
 const META_ACCUMULATED_INPUT: &str = "goose.accumulatedInput";
 const META_ACCUMULATED_OUTPUT: &str = "goose.accumulatedOutput";
@@ -1181,11 +1187,11 @@ const META_SYSTEM_NOTIFICATION: &str = "goose.systemNotification";
 /// the hood so the caller can reconcile its local state without a round-trip.
 const META_RESOLVED_PROVIDER_ID: &str = "goose.resolvedProviderId";
 
-/// Map an agent system-notification message to a stable `event` string the UI
-/// can switch on. The original notification messages are defined in
+/// Map an agent system-notification message to a stable `event` string ACP
+/// clients can switch on. The original notification messages are defined in
 /// `crates/goose/src/agents/agent.rs` (e.g. `COMPACTION_THINKING_TEXT`); we
 /// detect them here so the wire contract is a stable enum-like field instead
-/// of brittle text matching across the goose↔goose2 boundary.
+/// of brittle text matching across the wire.
 fn classify_system_notification(msg: &str) -> Option<&'static str> {
     if msg.starts_with("goose is compacting") {
         Some("compacting")
@@ -2482,14 +2488,14 @@ fn extract_tool_call_update_meta(
         .get(TRUSTED_TOOL_UPDATE_META_KEY)?
         .clone();
     let mut meta_map = serde_json::Map::new();
-    meta_map.insert("goose".to_string(), goose_meta);
+    meta_map.insert(META_GOOSE_KEY.to_string(), goose_meta);
     Some(meta_map)
 }
 
 fn replay_message_meta(message: &Message) -> Meta {
     let mut meta = serde_json::Map::new();
     meta.insert(
-        "goose".to_string(),
+        META_GOOSE_KEY.to_string(),
         serde_json::Value::Object(replay_message_goose_meta(message)),
     );
     meta
@@ -2508,7 +2514,7 @@ fn merge_replay_message_meta(meta: Option<Meta>, message: &Message) -> Meta {
     let replay_goose = replay_message_goose_meta(message);
     let mut meta = meta.unwrap_or_default();
     let goose_value = meta
-        .entry("goose".to_string())
+        .entry(META_GOOSE_KEY.to_string())
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
 
     if let serde_json::Value::Object(goose) = goose_value {
@@ -3317,9 +3323,9 @@ impl GooseAcpAgent {
                     }
                     drop(sessions);
 
-                    // Per-assistant-message UsageUpdate so the goose2 token
-                    // counter ticks during multi-tool-chain runs (a 10-step
-                    // agentic run otherwise looks frozen between turns).
+                    // Per-assistant-message UsageUpdate so ACP clients can tick
+                    // their token counter during multi-tool-chain runs (a
+                    // 10-step agentic run otherwise looks frozen between turns).
                     // Captured into `latest_session` so the final
                     // PromptResponse can reuse the most recent value instead
                     // of re-reading SQLite. Errors are warned-and-continued —
@@ -3356,9 +3362,9 @@ impl GooseAcpAgent {
         }
 
         // Surface "the model produced nothing" (e.g. openrouter/free emitting
-        // only empty `<think>` blocks) so goose2 can show a system-notification
-        // bubble instead of going silent. Cancellation is a user-requested stop,
-        // not a model failure — don't error on it.
+        // only empty `<think>` blocks) so ACP clients can show an error instead
+        // of going silent. Cancellation is a user-requested stop, not a model
+        // failure — don't error on it.
         if !was_cancelled && !had_visible_assistant_content {
             return Err(agent_client_protocol::Error::internal_error().with_detail(
                 "The model returned an empty response. Try again, change reasoning settings, or switch model.",

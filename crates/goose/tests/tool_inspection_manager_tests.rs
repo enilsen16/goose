@@ -65,6 +65,7 @@ async fn test_inspect_tools_aggregates_and_handles_errors() {
             inspector_name: "ok".to_string(),
             finding_id: None,
             prior_tool_ids: Vec::new(),
+            fire_count: 0,
         },
         InspectionResult {
             tool_request_id: "req_2".to_string(),
@@ -74,6 +75,7 @@ async fn test_inspect_tools_aggregates_and_handles_errors() {
             inspector_name: "ok".to_string(),
             finding_id: Some("FND-123".to_string()),
             prior_tool_ids: Vec::new(),
+            fire_count: 0,
         },
     ];
 

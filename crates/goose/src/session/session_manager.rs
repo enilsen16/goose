@@ -381,6 +381,17 @@ impl SessionManager {
         self.storage.delete_session(id).await
     }
 
+    /// Delete archived sessions (and their messages) whose `archived_at`
+    /// timestamp is older than the supplied threshold. Returns the number of
+    /// sessions removed. Messages have no `ON DELETE CASCADE`, so deletion is
+    /// done in order: messages first, then sessions, in a single transaction.
+    pub async fn prune_archived_sessions(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        self.storage.prune_archived_sessions(older_than).await
+    }
+
     pub async fn get_insights(&self) -> Result<SessionInsights> {
         self.storage
             .get_insights(&[SessionType::User, SessionType::Scheduled])
@@ -1726,6 +1737,31 @@ impl SessionStorage {
         Ok(())
     }
 
+    async fn prune_archived_sessions(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        let pool = self.pool().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        sqlx::query(
+            "DELETE FROM messages WHERE session_id IN \
+             (SELECT id FROM sessions WHERE archived_at IS NOT NULL AND archived_at < ?)",
+        )
+        .bind(older_than)
+        .execute(&mut *tx)
+        .await?;
+
+        let session_result =
+            sqlx::query("DELETE FROM sessions WHERE archived_at IS NOT NULL AND archived_at < ?")
+                .bind(older_than)
+                .execute(&mut *tx)
+                .await?;
+
+        tx.commit().await?;
+        Ok(session_result.rows_affected())
+    }
+
     async fn get_insights(&self, types: &[SessionType]) -> Result<SessionInsights> {
         if types.is_empty() {
             return Ok(SessionInsights {
@@ -2987,5 +3023,44 @@ mod tests {
         let updated = backfill_session_project_ids(&mut tx, &pairs).await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(updated, 0);
+    }
+
+    #[tokio::test]
+    async fn prune_archived_sessions_removes_old_and_keeps_recent() {
+        let temp_dir = TempDir::new().unwrap();
+        let sm = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let old_archived = create_session_for_list(&sm, "/tmp/old", true).await;
+        let recent_archived = create_session_for_list(&sm, "/tmp/recent", true).await;
+        let unarchived = create_session_for_list(&sm, "/tmp/live", true).await;
+
+        let very_old = chrono::Utc::now() - chrono::Duration::days(60);
+        let yesterday = chrono::Utc::now() - chrono::Duration::days(1);
+
+        sm.update(&old_archived)
+            .archived_at(Some(very_old))
+            .apply()
+            .await
+            .unwrap();
+        sm.update(&recent_archived)
+            .archived_at(Some(yesterday))
+            .apply()
+            .await
+            .unwrap();
+
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(30);
+        let removed = sm.prune_archived_sessions(cutoff).await.unwrap();
+        assert_eq!(removed, 1);
+
+        let surviving: Vec<String> = sm
+            .list_all_sessions()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert!(!surviving.contains(&old_archived));
+        assert!(surviving.contains(&recent_archived));
+        assert!(surviving.contains(&unarchived));
     }
 }

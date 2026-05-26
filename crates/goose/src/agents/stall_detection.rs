@@ -111,6 +111,29 @@ pub fn previous_user_message_is_stall_hint(messages: &[Message]) -> bool {
     previous_user_message_starts_with(messages, STALL_HINT_PREFIX)
 }
 
+/// True if the most recent assistant turn's last non-empty `Text` block ends
+/// with `?`. Thinking, tool-request, and system-notification blocks are
+/// skipped — only model-authored prose counts. A bare "yes"/"continue" reply
+/// to such a turn is an answer, not a stall, so the stall hint should not
+/// fire.
+pub fn prior_assistant_asked_question(messages: &[Message]) -> bool {
+    for msg in messages.iter().rev() {
+        if msg.role != Role::Assistant {
+            continue;
+        }
+        for content in msg.content.iter().rev() {
+            if let MessageContent::Text(t) = content {
+                let trimmed = t.text.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.ends_with('?');
+                }
+            }
+        }
+        return false;
+    }
+    false
+}
+
 /// True if we already injected the plan hint on the previous user turn.
 pub fn previous_user_message_is_plan_hint(messages: &[Message]) -> bool {
     previous_user_message_starts_with(messages, PLAN_HINT_PREFIX)
@@ -153,6 +176,9 @@ pub fn should_inject_stall_hint(current_user_text: &str, messages: &[Message]) -
         return false;
     }
     if previous_user_message_is_stall_hint(messages) {
+        return false;
+    }
+    if prior_assistant_asked_question(messages) {
         return false;
     }
     no_tool_request_since_prior_user(messages)
@@ -368,6 +394,55 @@ mod tests {
             user("continue"),
         ];
         assert!(!should_inject_stall_hint("continue", &msgs));
+    }
+
+    #[test]
+    fn prior_assistant_asked_question_detects_trailing_question_mark() {
+        let msgs = vec![
+            user("debug this"),
+            Message::assistant().with_text("May I fall back to `gh pr diff`?"),
+        ];
+        assert!(prior_assistant_asked_question(&msgs));
+    }
+
+    #[test]
+    fn prior_assistant_asked_question_ignores_thinking_blocks() {
+        // Thinking ends with "?" but visible text doesn't.
+        let msgs = vec![
+            user("debug this"),
+            Message::assistant()
+                .with_thinking("should I do X or Y?", "")
+                .with_text("Proceeding with X."),
+        ];
+        assert!(!prior_assistant_asked_question(&msgs));
+    }
+
+    #[test]
+    fn prior_assistant_asked_question_returns_false_for_statement() {
+        let msgs = vec![
+            user("debug this"),
+            Message::assistant().with_text("Here is what I found."),
+        ];
+        assert!(!prior_assistant_asked_question(&msgs));
+    }
+
+    #[test]
+    fn prior_assistant_asked_question_returns_false_when_no_text() {
+        let msgs = vec![user("debug this"), assistant_tool("shell")];
+        assert!(!prior_assistant_asked_question(&msgs));
+    }
+
+    #[test]
+    fn should_inject_skips_when_prior_assistant_asked_question() {
+        // Mirrors session 20260526_8 msgs 14558→14559→14560:
+        // assistant asks "May I fall back...?", user says "yes", hint
+        // should NOT fire because the user is answering, not nudging.
+        let msgs = vec![
+            user("review the PR"),
+            Message::assistant().with_text("May I fall back to `gh pr diff`?"),
+            user("yes"),
+        ];
+        assert!(!should_inject_stall_hint("yes", &msgs));
     }
 
     #[test]

@@ -22,7 +22,6 @@ use crate::agents::extension_manager::{
     get_parameter_names, ExtensionManager, ExtensionManagerCapabilities,
 };
 use crate::agents::final_output_tool::{FINAL_OUTPUT_CONTINUATION_MESSAGE, FINAL_OUTPUT_TOOL_NAME};
-use crate::agents::platform_extensions::summon::discover_filesystem_sources;
 use crate::agents::platform_extensions::MANAGE_EXTENSIONS_TOOL_NAME_COMPLETE;
 use crate::agents::platform_tools::PLATFORM_MANAGE_SCHEDULE_TOOL_NAME;
 use crate::agents::prompt_manager::PromptManager;
@@ -35,8 +34,8 @@ use crate::context_mgmt::{
     check_if_compaction_needed, compact_messages, DEFAULT_COMPACTION_THRESHOLD,
 };
 use crate::conversation::message::{
-    ActionRequiredData, InferenceMetadata, Message, MessageContent, ProviderMetadata,
-    SystemNotificationType, ToolRequest,
+    ActionRequiredData, InferenceMetadata, Message, MessageContent, MessageMetadata,
+    ProviderMetadata, SystemNotificationType, ToolRequest,
 };
 use crate::conversation::{debug_conversation_fix, fix_conversation, Conversation};
 use crate::mcp_utils::ToolResult;
@@ -247,14 +246,10 @@ pub type ToolStream =
 const TOOL_ERROR_FINGERPRINT_BUDGET: usize = 200;
 
 /// Prefix of every REP-001/002/003 hint message injected into the conversation.
-/// goose2's stall indicator regex-matches this prefix to surface REP firings
-/// in the UI without a separate metadata channel. The Rust-side
+/// ACP clients can regex-match this prefix to surface REP firings in their UI
+/// without a separate metadata channel. The Rust-side
 /// `rep_hint_prefix_matches_injected_hint` test asserts the format!() output
 /// starts with this string — keep them in sync.
-///
-/// Lint is `allow(dead_code)` because the value's only Rust-side consumer is
-/// the contract test; its real role is a cross-process contract with goose2's
-/// `useSessionProgress.ts`, which inlines the same literal.
 #[allow(dead_code)]
 pub const REP_HINT_PREFIX: &str = "Note: Tool '";
 
@@ -1711,12 +1706,16 @@ impl Agent {
             };
 
             if super::stall_detection::should_inject_stall_hint(&stall_check_text, final_conversation.messages()) {
-                let hint = Message::user().with_text(super::stall_detection::STALL_HINT);
+                let hint = Message::user()
+                    .with_text(super::stall_detection::STALL_HINT)
+                    .with_metadata(MessageMetadata::agent_only());
                 session_manager.add_message(&session_config.id, &hint).await?;
                 final_conversation.push(hint.clone());
                 yield AgentEvent::Message(hint);
             } else if super::stall_detection::should_inject_plan_hint(&stall_check_text, final_conversation.messages()) {
-                let hint = Message::user().with_text(super::stall_detection::PLAN_HINT);
+                let hint = Message::user()
+                    .with_text(super::stall_detection::PLAN_HINT)
+                    .with_metadata(MessageMetadata::agent_only());
                 session_manager.add_message(&session_config.id, &hint).await?;
                 final_conversation.push(hint.clone());
                 yield AgentEvent::Message(hint);
@@ -2198,7 +2197,9 @@ impl Agent {
                                                  tool, or a different ID field from earlier results.",
                                                 result.reason
                                             );
-                                            let hint_msg = Message::user().with_text(hint);
+                                            let hint_msg = Message::user()
+                                                .with_text(hint)
+                                                .with_metadata(MessageMetadata::agent_only());
                                             yield AgentEvent::Message(hint_msg.clone());
                                             messages_to_add.push(hint_msg);
                                         }
@@ -2211,15 +2212,29 @@ impl Agent {
                                                     == Some(FINDING_ID_REPEATED_PATH)
                                         });
                                         if let Some(result) = rep003_finding {
-                                            let hint = format!(
-                                                "Note: {}. Use `rg` or `grep` to search for \
-                                                 specific symbols — do not read this file again \
-                                                 until you have written to it.",
-                                                result.reason
-                                            );
-                                            let hint_msg = Message::user().with_text(hint);
-                                            yield AgentEvent::Message(hint_msg.clone());
-                                            messages_to_add.push(hint_msg);
+                                            // First REP-003 fire in this session: agent-only
+                                            // nudge to grep/rg instead of re-reading. On the
+                                            // second+ fire the model has demonstrably ignored
+                                            // the first nudge — escalate to a user-visible
+                                            // assistant message so a human can redirect.
+                                            let msg = if result.fire_count >= 2 {
+                                                Message::assistant().with_text(format!(
+                                                    "Stopped: the same path has been re-read after a warning ({}). \
+                                                     Tell me what you want me to look for instead of re-reading the file.",
+                                                    result.reason
+                                                ))
+                                            } else {
+                                                Message::user()
+                                                    .with_text(format!(
+                                                        "Note: {}. Use `rg` or `grep` to search for \
+                                                         specific symbols — do not read this file again \
+                                                         until you have written to it.",
+                                                        result.reason
+                                                    ))
+                                                    .with_metadata(MessageMetadata::agent_only())
+                                            };
+                                            yield AgentEvent::Message(msg.clone());
+                                            messages_to_add.push(msg);
                                         }
 
                                         // Spawn targeted summarization for any REP finding that

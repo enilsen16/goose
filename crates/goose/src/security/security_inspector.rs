@@ -43,6 +43,7 @@ impl SecurityInspector {
             inspector_name: self.name().to_string(),
             finding_id: Some(security_result.finding_id.clone()),
             prior_tool_ids: Vec::new(),
+            fire_count: 0,
         }
     }
 }

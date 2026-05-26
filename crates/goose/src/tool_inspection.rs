@@ -22,6 +22,12 @@ pub struct InspectionResult {
     /// most-recent matching call is intentionally *not* included so it stays
     /// verbatim in the conversation. Empty for non-loop findings.
     pub prior_tool_ids: Vec<String>,
+    /// 1-indexed firing count for this finding within the current Agent
+    /// lifetime — i.e. session. Inspectors that don't track repeat firings
+    /// (security, egress, permission) leave this at 0. REP-003 uses it to
+    /// escalate from a model-only nudge on the first fire to a user-visible
+    /// stop on the second.
+    pub fire_count: u32,
 }
 
 impl Default for InspectionResult {
@@ -34,6 +40,7 @@ impl Default for InspectionResult {
             inspector_name: String::new(),
             finding_id: None,
             prior_tool_ids: Vec::new(),
+            fire_count: 0,
         }
     }
 }
@@ -330,6 +337,7 @@ mod tests {
             inspector_name: "test_inspector".to_string(),
             finding_id: Some("TEST-001".to_string()),
             prior_tool_ids: Vec::new(),
+            fire_count: 0,
         }];
 
         let updated_result =

@@ -409,6 +409,7 @@ impl ToolInspector for AdversaryInspector {
                         inspector_name: self.name().to_string(),
                         finding_id: None,
                         prior_tool_ids: Vec::new(),
+                        fire_count: 0,
                     });
                 }
                 Ok((false, reason)) => {
@@ -425,6 +426,7 @@ impl ToolInspector for AdversaryInspector {
                         inspector_name: self.name().to_string(),
                         finding_id: None,
                         prior_tool_ids: Vec::new(),
+                        fire_count: 0,
                     });
                 }
                 Err(e) => {
@@ -441,6 +443,7 @@ impl ToolInspector for AdversaryInspector {
                         inspector_name: self.name().to_string(),
                         finding_id: None,
                         prior_tool_ids: Vec::new(),
+                        fire_count: 0,
                     });
                 }
             }
