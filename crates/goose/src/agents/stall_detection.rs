@@ -1,15 +1,12 @@
 use crate::conversation::message::{Message, MessageContent};
-use crate::tool_monitor::STATE_CHANGE_TOOLS;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use rmcp::model::Role;
 
-pub const STALL_HINT: &str = "Note: No forward progress since your last response — \
-no file write or edit has happened since the previous user turn. Before continuing, \
-summarize what is blocking you, the design choice you are facing, or what you need \
-from me, then proceed.";
+pub const STALL_HINT: &str = "Note: No tool call has happened since the previous user turn. \
+If you are blocked, say what you need. Otherwise proceed.";
 
-const STALL_HINT_PREFIX: &str = "Note: No forward progress";
+const STALL_HINT_PREFIX: &str = "Note: No tool call";
 
 pub const PLAN_HINT: &str = "Note: This looks like a multi-phase implementation. \
 Before making changes, call `todo_write` to externalize the plan — your todo content \
@@ -51,8 +48,10 @@ pub fn is_bare_nudge(text: &str) -> bool {
 
 /// Walks newest-first through messages, stopping at the most recent user
 /// message that is *not* the one we're evaluating. Returns true if no
-/// state-change tool request appeared between then and now.
-pub fn no_state_change_since_prior_user(messages: &[Message]) -> bool {
+/// tool request of any kind appeared between then and now. Reads count as
+/// progress — investigation-heavy workflows (PR review, debugging) should
+/// not trip the stall detector.
+pub fn no_tool_request_since_prior_user(messages: &[Message]) -> bool {
     let mut user_seen = 0u32;
     for msg in messages.iter().rev() {
         if msg.role == Role::User {
@@ -66,12 +65,8 @@ pub fn no_state_change_since_prior_user(messages: &[Message]) -> bool {
             continue;
         }
         for content in &msg.content {
-            if let MessageContent::ToolRequest(tr) = content {
-                if let Ok(tc) = &tr.tool_call {
-                    if STATE_CHANGE_TOOLS.contains(&tc.name.as_ref()) {
-                        return false;
-                    }
-                }
+            if matches!(content, MessageContent::ToolRequest(_)) {
+                return false;
             }
         }
     }
@@ -148,9 +143,9 @@ pub fn most_recent_assistant_called_todo_write(messages: &[Message]) -> bool {
     false
 }
 
-/// Returns true if the current user message is a bare nudge, no state-change
-/// tool ran since the previous user message, and we did not already inject
-/// the stall hint last turn.
+/// Returns true if the current user message is a bare nudge, no tool request
+/// of any kind happened since the previous user message, and we did not
+/// already inject the stall hint last turn.
 pub fn should_inject_stall_hint(current_user_text: &str, messages: &[Message]) -> bool {
     if !is_bare_nudge(current_user_text) {
         return false;
@@ -158,7 +153,7 @@ pub fn should_inject_stall_hint(current_user_text: &str, messages: &[Message]) -
     if previous_user_message_is_stall_hint(messages) {
         return false;
     }
-    no_state_change_since_prior_user(messages)
+    no_tool_request_since_prior_user(messages)
 }
 
 /// Returns true if the current user message looks like a plan-implementation
@@ -235,41 +230,38 @@ mod tests {
     }
 
     #[test]
-    fn no_state_change_returns_true_when_no_writes_between_user_turns() {
+    fn no_tool_request_returns_true_when_only_text_between_user_turns() {
         let msgs = vec![
             user("first ask"),
-            assistant_tool("read"),
-            assistant_tool("read"),
+            Message::assistant().with_text("thinking out loud"),
+            Message::assistant().with_text("still thinking"),
             user("continue"),
         ];
-        assert!(no_state_change_since_prior_user(&msgs));
+        assert!(no_tool_request_since_prior_user(&msgs));
     }
 
     #[test]
-    fn no_state_change_returns_false_when_write_appears() {
-        let msgs = vec![
-            user("first ask"),
-            assistant_tool("read"),
-            assistant_tool("write"),
-            user("continue"),
-        ];
-        assert!(!no_state_change_since_prior_user(&msgs));
+    fn no_tool_request_returns_false_when_read_appears() {
+        let msgs = vec![user("first ask"), assistant_tool("read"), user("continue")];
+        assert!(!no_tool_request_since_prior_user(&msgs));
     }
 
     #[test]
-    fn no_state_change_recognizes_developer_prefixed_tools() {
-        let msgs = vec![
-            user("first ask"),
-            assistant_tool("developer__text_editor"),
-            user("continue"),
-        ];
-        assert!(!no_state_change_since_prior_user(&msgs));
+    fn no_tool_request_returns_false_when_shell_appears() {
+        let msgs = vec![user("first ask"), assistant_tool("shell"), user("continue")];
+        assert!(!no_tool_request_since_prior_user(&msgs));
     }
 
     #[test]
-    fn no_state_change_returns_true_with_only_one_user_turn_and_no_writes() {
-        let msgs = vec![user("only ask"), assistant_tool("read")];
-        assert!(no_state_change_since_prior_user(&msgs));
+    fn no_tool_request_returns_false_when_write_appears() {
+        let msgs = vec![user("first ask"), assistant_tool("write"), user("continue")];
+        assert!(!no_tool_request_since_prior_user(&msgs));
+    }
+
+    #[test]
+    fn no_tool_request_returns_true_with_only_one_user_turn_and_no_tools() {
+        let msgs = vec![user("only ask"), Message::assistant().with_text("ok")];
+        assert!(no_tool_request_since_prior_user(&msgs));
     }
 
     #[test]
@@ -306,11 +298,11 @@ mod tests {
     }
 
     #[test]
-    fn should_inject_fires_on_bare_nudge_after_stall() {
+    fn should_inject_fires_on_bare_nudge_after_text_only_turn() {
         let msgs = vec![
             user("debug this"),
-            assistant_tool("shell"),
-            assistant_tool("shell"),
+            Message::assistant().with_text("let me think about this"),
+            Message::assistant().with_text("hmm"),
             user("continue"),
         ];
         assert!(should_inject_stall_hint("continue", &msgs));
@@ -320,10 +312,20 @@ mod tests {
     fn should_inject_skips_when_substantive_message() {
         let msgs = vec![
             user("debug this"),
-            assistant_tool("shell"),
+            Message::assistant().with_text("thinking"),
             user("look at line 42"),
         ];
         assert!(!should_inject_stall_hint("look at line 42", &msgs));
+    }
+
+    #[test]
+    fn should_inject_skips_when_any_tool_ran() {
+        let msgs = vec![
+            user("review this PR"),
+            assistant_tool("shell"),
+            user("continue"),
+        ];
+        assert!(!should_inject_stall_hint("continue", &msgs));
     }
 
     #[test]
@@ -340,7 +342,7 @@ mod tests {
     fn should_inject_skips_when_cooldown_active() {
         let msgs = vec![
             user("debug"),
-            assistant_tool("shell"),
+            Message::assistant().with_text("hmm"),
             user(STALL_HINT),
             Message::assistant().with_text("summary"),
             user("yes"),
