@@ -65,8 +65,10 @@ pub fn no_tool_request_since_prior_user(messages: &[Message]) -> bool {
             continue;
         }
         for content in &msg.content {
-            if matches!(content, MessageContent::ToolRequest(_)) {
-                return false;
+            match content {
+                MessageContent::ToolRequest(tr) if tr.tool_call.is_ok() => return false,
+                MessageContent::FrontendToolRequest(ftr) if ftr.tool_call.is_ok() => return false,
+                _ => continue,
             }
         }
     }
@@ -175,7 +177,7 @@ pub fn should_inject_plan_hint(current_user_text: &str, messages: &[Message]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::CallToolRequestParams;
+    use rmcp::model::{CallToolRequestParams, ErrorCode, ErrorData};
     use serde_json::json;
 
     fn user(text: &str) -> Message {
@@ -186,6 +188,17 @@ mod tests {
         let tool_call = Ok(CallToolRequestParams::new(name)
             .with_arguments(json!({}).as_object().cloned().unwrap_or_default()));
         Message::assistant().with_tool_request("id-x", tool_call)
+    }
+
+    fn assistant_tool_err() -> Message {
+        let tool_call = Err(ErrorData::new(ErrorCode::INVALID_PARAMS, "bad args", None));
+        Message::assistant().with_tool_request("id-err", tool_call)
+    }
+
+    fn assistant_frontend_tool(name: &'static str) -> Message {
+        let tool_call = Ok(CallToolRequestParams::new(name)
+            .with_arguments(json!({}).as_object().cloned().unwrap_or_default()));
+        Message::assistant().with_frontend_tool_request("id-f", tool_call)
     }
 
     #[test]
@@ -262,6 +275,25 @@ mod tests {
     fn no_tool_request_returns_true_with_only_one_user_turn_and_no_tools() {
         let msgs = vec![user("only ask"), Message::assistant().with_text("ok")];
         assert!(no_tool_request_since_prior_user(&msgs));
+    }
+
+    #[test]
+    fn no_tool_request_returns_true_when_only_errored_tool_call_present() {
+        // A ToolRequest whose tool_call is Err(_) means the model tried to call
+        // a tool but the arguments didn't parse — no real work happened, so
+        // bare-nudge stall hint should still fire.
+        let msgs = vec![user("first ask"), assistant_tool_err(), user("continue")];
+        assert!(no_tool_request_since_prior_user(&msgs));
+    }
+
+    #[test]
+    fn no_tool_request_returns_false_when_frontend_tool_request_appears() {
+        let msgs = vec![
+            user("first ask"),
+            assistant_frontend_tool("browser_action"),
+            user("continue"),
+        ];
+        assert!(!no_tool_request_since_prior_user(&msgs));
     }
 
     #[test]
