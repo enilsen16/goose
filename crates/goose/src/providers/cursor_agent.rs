@@ -2,6 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use rmcp::model::Role;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -23,9 +24,32 @@ use rmcp::model::Tool;
 
 const CURSOR_AGENT_PROVIDER_NAME: &str = "cursor-agent";
 pub const CURSOR_AGENT_DEFAULT_MODEL: &str = "auto";
-pub const CURSOR_AGENT_KNOWN_MODELS: &[&str] = &["auto", "composer-2", "composer-2-fast"];
 
 pub const CURSOR_AGENT_DOC_URL: &str = "https://docs.cursor.com/en/cli/overview";
+
+fn parse_models_output(stdout: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut models = Vec::new();
+    for raw in stdout.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.to_ascii_lowercase().starts_with("available models") {
+            continue;
+        }
+        let Some((id, _)) = line.split_once(" - ") else {
+            continue;
+        };
+        if id.is_empty() || id.chars().any(char::is_whitespace) {
+            continue;
+        }
+        if seen.insert(id.to_string()) {
+            models.push(id.to_string());
+        }
+    }
+    models
+}
 
 #[derive(Debug, serde::Serialize)]
 pub struct CursorAgentProvider {
@@ -285,7 +309,8 @@ impl ProviderDef for CursorAgentProvider {
             "Cursor Agent",
             "Execute AI models via cursor-agent CLI tool",
             CURSOR_AGENT_DEFAULT_MODEL,
-            CURSOR_AGENT_KNOWN_MODELS.to_vec(),
+            // Fetched dynamically via fetch_supported_models.
+            vec![],
             CURSOR_AGENT_DOC_URL,
             vec![ConfigKey::from_value_type::<CursorAgentCommand>(
                 true, false, true,
@@ -313,10 +338,40 @@ impl Provider for CursorAgentProvider {
     }
 
     async fn fetch_supported_models(&self) -> Result<Vec<String>, ProviderError> {
-        Ok(CURSOR_AGENT_KNOWN_MODELS
-            .iter()
-            .map(|s| s.to_string())
-            .collect())
+        let mut cmd = Command::new(&self.command);
+        configure_subprocess(&mut cmd);
+        if let Ok(path) = SearchPaths::builder().with_npm().path() {
+            cmd.env("PATH", path);
+        }
+        cmd.arg("models")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = cmd.spawn().map_err(|e| {
+            ProviderError::RequestFailed(format!(
+                "Failed to spawn cursor-agent for model listing: {e}"
+            ))
+        })?;
+        let output = output.wait_with_output().await.map_err(|e| {
+            ProviderError::RequestFailed(format!("Failed to read cursor-agent models output: {e}"))
+        })?;
+
+        if !output.status.success() {
+            if !self.get_authentication_status().await {
+                return Err(ProviderError::Authentication(
+                    "You are not logged in to cursor-agent. Please run 'cursor-agent login' to authenticate first."
+                        .to_string(),
+                ));
+            }
+            return Err(ProviderError::RequestFailed(format!(
+                "cursor-agent models exited with status: {:?}",
+                output.status.code()
+            )));
+        }
+
+        Ok(parse_models_output(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     async fn stream(
@@ -357,5 +412,81 @@ impl Provider for CursorAgentProvider {
 
         let provider_usage = ProviderUsage::new(model_config.model_name.clone(), usage);
         Ok(stream_from_single_message(message, provider_usage))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_models_output;
+
+    #[test]
+    fn happy_path() {
+        let stdout = "\
+Available models
+
+auto - Auto (current)
+composer-2-fast - Composer 2 Fast
+composer-2 - Composer 2
+gpt-5.3-codex - Codex 5.3
+composer-2.5-fast - Composer 2.5 Fast (default)
+gpt-5.5-none - GPT-5.5 1M None
+";
+        assert_eq!(
+            parse_models_output(stdout),
+            vec![
+                "auto",
+                "composer-2-fast",
+                "composer-2",
+                "gpt-5.3-codex",
+                "composer-2.5-fast",
+                "gpt-5.5-none",
+            ]
+        );
+    }
+
+    #[test]
+    fn strips_header_and_blank_lines() {
+        let stdout = "\n\nAvailable models\n\n\nauto - Auto\n\ncomposer-2 - Composer 2\n\n";
+        assert_eq!(parse_models_output(stdout), vec!["auto", "composer-2"]);
+    }
+
+    #[test]
+    fn parenthetical_suffixes_ignored() {
+        let stdout = "\
+auto - Auto (current)
+composer-2.5-fast - Composer 2.5 Fast (default)
+";
+        assert_eq!(
+            parse_models_output(stdout),
+            vec!["auto", "composer-2.5-fast"]
+        );
+    }
+
+    #[test]
+    fn skips_unparseable_lines() {
+        let stdout = "\
+Available models
+
+auto - Auto
+Error: not logged in
+some random text
+composer-2 - Composer 2
+";
+        assert_eq!(parse_models_output(stdout), vec!["auto", "composer-2"]);
+    }
+
+    #[test]
+    fn empty_input() {
+        assert!(parse_models_output("").is_empty());
+    }
+
+    #[test]
+    fn dedup_preserves_first_occurrence() {
+        let stdout = "\
+auto - Auto (current)
+composer-2 - Composer 2
+auto - Auto Again
+";
+        assert_eq!(parse_models_output(stdout), vec!["auto", "composer-2"]);
     }
 }
